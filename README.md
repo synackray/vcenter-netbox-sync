@@ -16,6 +16,17 @@ This program follows the [ETL](https://en.wikipedia.org/wiki/Extract,_transform,
 2. Extracted vCenter objects are converted into their corresponding NetBox objects.
 3. The transformed objects are imported into NetBox.
 
+## Object Codex
+
+The following objects are tracked and synced between vCenter and NetBox.
+
+| vCenter          | NetBox                         | Supports Tags |
+|------------------|--------------------------------|---------------|
+| Datacenters      | Cluster Groups                 | No            |
+| Clusters         | Clusters                       | Yes           |
+| Hosts            | Devices                        | Yes           |
+| Virtual Machines | Virtual Machines, IP Addresses | Yes           |
+
 ## Requirements
 
 The following minimum software versions have been tested for compatibility.
@@ -25,7 +36,7 @@ The following minimum software versions have been tested for compatibility.
 
 ## Installation
 
-1. Clone the repo.
+1. Clone the repository.
 2. Create a Python Virtual Environment [(venv)](https://docs.python.org/3/library/venv.html) and activate it.
 3. Install the package requirements by running `pip install -r requirements.txt`.
 4. Copy the `settings.example.py` to `settings.py` and fill in the values.
