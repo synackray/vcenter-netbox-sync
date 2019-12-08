@@ -20,12 +20,14 @@ This program follows the [ETL](https://en.wikipedia.org/wiki/Extract,_transform,
 
 The following objects are tracked and synced between vCenter and NetBox.
 
-| vCenter          | NetBox                         | Supports Tags |
-|------------------|--------------------------------|---------------|
-| Datacenters      | Cluster Groups                 | No            |
-| Clusters         | Clusters                       | Yes           |
-| Hosts            | Devices                        | Yes           |
-| Virtual Machines | Virtual Machines, IP Addresses | Yes           |
+| vCenter          | NetBox                                     | Supports Tags |
+|------------------|--------------------------------------------|---------------|
+| Datacenters      | Cluster Groups                             | No            |
+| Clusters         | Clusters                                   | Yes           |
+| Hosts            | Manufacturers, Platforms                   | No            |
+| Hosts            | Device Types, Devices, Interfaces          | Yes           |
+| Virtual Machines | Platforms                                  | No            |
+| Virtual Machines | Interfaces, IP Addresses, Virtual Machines | Yes           |
 
 ## Requirements
 
