@@ -4,6 +4,7 @@
 import atexit
 from socket import gaierror
 from sys import exit as sysexit
+import requests
 from pyVim.connect import SmartConnectNoSSL, Disconnect
 from pyVmomi import vim
 import settings
@@ -13,8 +14,10 @@ from logger import log
 
 def main():
     """Main function to run if script is called directly"""
-    vc = vCenterHandler()
-    vc.view_explorer()
+    # vc = vCenterHandler()
+    # vc.view_explorer()
+    nb = NetBoxHandler()
+    nb.verify_dependencies()
 
 class vCenterHandler:
     """Handles vCenter connection state and export of objects"""
@@ -121,6 +124,64 @@ class vCenterHandler:
         import pdb
         pdb.set_trace()
         container_view.Destroy()
+
+class NetBoxHandler:
+    """Handles NetBox connection state and object sync operations"""
+    def __init__(self):
+        self.header = {"Authorization": "Token {}".format(settings.NB_API_KEY)}
+        self.nb_api_url = "http{}://{}{}/api/".format(
+            ("s" if not settings.NB_DISABLE_TLS else ""), settings.NB_FQDN,
+            (":{}".format(settings.NB_PORT) if settings.NB_PORT != 443 else "")
+            )
+
+    def verify_dependencies(self):
+        """Validates that all prerequisite objects exist in NetBox"""
+        dependencies = {
+            "manufacturers": [
+                {"name": "VMware", "slug": "vmware"},
+                ],
+            "platforms": [
+                {"name": "VMware ESXi", "slug": "vmware-esxi"},
+                {"name": "Windows", "slug": "Windows"},
+                {"name": "Linux", "slug": "linux"},
+                ]
+            }
+        # For each dependency of each type verify it exists
+        log.info("Verifying all prerequisite objects exist in NetBox.")
+        with requests.Session() as s:
+            for dep_type in dependencies:
+                url = "{}dcim/{}/".format(self.nb_api_url, dep_type)
+                log.info("Checking NetBox has necessary %s objects.", dep_type)
+                for dep in dependencies[dep_type]:
+                    log.debug("Sending POST to %s", url)
+                    req = s.post(
+                        url=url, timeout=10, headers=self.header, data=dep
+                        )
+                    log.debug(
+                        "Received %s status code for request.", req.status_code
+                        )
+                    if req.status_code == 201:
+                        log.info(
+                            "NetBox '%s' %s object successfully created.",
+                            dep["name"], dep_type
+                            )
+                    elif req.status_code == 400:
+                        log.info(
+                            "NetBox '%s' %s object already exists.",
+                            dep["name"], dep_type
+                            )
+                    else:
+                        try:
+                            req.raise_for_status()
+                        except (requests.exceptions.HTTPError,
+                                requests.exceptions.ConnectionError) as err:
+                            sysexit(
+                                log.critical(
+                                    "Could not connect to NetBox at %s due to "
+                                    "error: %s", url, err
+                                    )
+                                )
+
 
 if __name__ == "__main__":
     main()

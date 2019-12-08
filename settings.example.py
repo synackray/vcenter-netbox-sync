@@ -7,9 +7,12 @@ LOG_FILE = True # Places all logs in a rotating file if True
 
 # vCenter Settings
 VC_HOST = "" # IP or Hostname - vcenter1.example.com
-VC_PORT = 443 # vCenter port to connect if changed from default
+VC_PORT = 443 # vCenter port to connect to if changed from default
 VC_USER = "" # User account to authenticate to vCenter, supports SSO with @domain.tld suffix
 VC_PASS = "" # Password for the account defined in VC_USER
 
 # NetBox Settings
 NB_API_KEY = "" # NetBox API Key
+NB_DISABLE_TLS = False # Disables SSL/TLS and uses HTTP for requests. Not ever recommended.
+NB_FQDN = "netbox.example.com" # The fully qualified domain name to reach NetBox
+NB_PORT = 443 # [optional] NetBox port to connect to if changed from the default
