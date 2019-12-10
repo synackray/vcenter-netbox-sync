@@ -15,7 +15,9 @@ def main():
     nb = NetBoxHandler()
     nb.verify_dependencies()
     nb.sync_objects(vc_obj_type="datacenters", nb_obj_type="cluster_groups")
-    nb.sync_objects(vc_obj_type="clusters", nb_obj_type="clusters")
+    nb.sync_objects(
+        vc_obj_type="clusters", nb_obj_type="clusters", compare=True
+        )
 
 class vCenterHandler:
     """Handles vCenter connection state and export of objects"""
@@ -152,7 +154,8 @@ class NetBoxHandler:
         self.nb_session = None
         self.vc = vCenterHandler()
 
-    def request(self, req_type, nb_obj_type, data=None, query=None, nb_id=None):
+    def request(self, req_type, nb_obj_type, data=None, query=None, tag=None,
+                nb_id=None):
         """HTTP requests and exception handler for NetBox"""
         # Object family relationships in the API used for url crafting
         obj_families = {
@@ -172,21 +175,35 @@ class NetBoxHandler:
         if not self.nb_session:
             self.nb_session = requests.Session()
             self.nb_session.headers.update(self.header)
+        result = None
         # Generate URL
         url = "{}{}/{}/{}{}".format(
             self.nb_api_url,
             obj_families[nb_obj_type],
             nb_obj_type.replace("_", "-"), # Converts to url format
             "?name={}".format(query) if query else "",
+            "?tag={}".format(tag) if tag else "",
             "{}/".format(nb_id) if nb_id else ""
             )
         log.debug("Sending %s to %s", req_type.upper(), url)
         req = getattr(self.nb_session, req_type)(url, json=data, timeout=10)
+        # Parse status
         if req.status_code == 200:
             log.debug(
                 "NetBox %s request OK; returned %s status.", req_type.upper(),
                 req.status_code
                 )
+            result = req.json()
+            # NetBox returns 50 results by default, this ensures all results
+            # are bundled together
+            while req.json()["next"] != None:
+                url = req.json()["next"]
+                log.debug(
+                    "NetBox returned more than 50 objects. Sending %s to %s "
+                    "for additional objects.", req_type.upper(), url
+                    )
+                req = getattr(self.nb_session, req_type)(url, timeout=10)
+                result["results"] += req.json()["results"]
         elif req.status_code in [201, 204]:
             log.info(
                 "NetBox successfully %s %s object.",
@@ -226,13 +243,11 @@ class NetBoxHandler:
                     req_type.upper(), req.status_code, data
                     )
                 )
-        try:
-            return req.json()
-        except TypeError:
-            return req.text
+        return result
 
     def obj_exists(self, nb_obj_type, data):
-        """Checks if a NetBox object exists and if not creates it."""
+        """Checks if a NetBox object exists and has matching key value pairs.
+        If not, the record wil be created or updated."""
         req = self.request(
             req_type="get", nb_obj_type=nb_obj_type,
             query=data["name"]
@@ -246,12 +261,26 @@ class NetBoxHandler:
                 data["name"]
                 )
             for key in data:
-                if data[key] == req["results"][0][key]:
-                    log.debug("New and old %s values match. Moving on.", key)
+                new_value = req["results"][0][key]
+                # For NetBox relational objects, NetBox returns nested
+                # dictionaries; we parse them using list comprehension and
+                # verify the nested key value pairs match
+                if isinstance(data[key], dict):
+                    nested_match = all([
+                        data[key][sub_key] == new_value[sub_key]
+                        for sub_key in data[key]
+                        ])
+                # Parse values
+                if data[key] == new_value or nested_match:
+                    log.debug("New and old '%s' values match. Moving on.", key)
                 else:
                     log.info(
                         "New and old object values do not match. Updating "
                         "NetBox with the latest object data."
+                        )
+                    log.debug(
+                        "Old %s value is '%s' and new value is '%s'.",
+                        key, data[key], new_value
                         )
                     self.request(
                         req_type="put", nb_obj_type=nb_obj_type,
@@ -297,11 +326,28 @@ class NetBoxHandler:
                 nb_obj_type[:-1],
                 "s" if len(vc_objects[nb_obj_type]) != 1 else "",
                 )
-            # When True collect all objects of type from from NetBox, compare
-            # their key value pairs to the vCenter objects and go through a
+            # When True collect all objects of type from from NetBox, compares
+            # their names to the vCenter objects and go through a
             # pruning process if they're orphaned
             if compare:
-                pass
+                # Collect all NetBox objects of type with vCenter tag
+                nb_objects = self.request(
+                    req_type="get", nb_obj_type=nb_obj_type, tag="vcenter"
+                    )["results"]
+                # Determine whether objects match
+                temp = self.compare_objects(nb_objects, vc_objects)
+
+    def compare_objects(self, nb_objects, vc_objects):
+        """Compares current objects from NetBox to vCenter collected objects.
+        If there are objects that do not match they are returned in a list."""
+        log.info("Comparing vCenter objects to existing NetBox objects.")
+        # For every object type collected from vCenter
+        for nb_obj_type in vc_objects:
+            # Compare the objects of each type
+            for obj in vc_objects[nb_obj_type]:
+                # Build lookup of obj name key to nb_objects.
+                log.debug(obj)
+                import pdb;pdb.set_trace()
 
     def verify_dependencies(self):
         """Validates that all prerequisite objects exist in NetBox"""
