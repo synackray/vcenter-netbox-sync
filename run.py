@@ -15,9 +15,7 @@ def main():
     nb = NetBoxHandler()
     nb.verify_dependencies()
     nb.sync_objects(vc_obj_type="datacenters", nb_obj_type="cluster_groups")
-    nb.sync_objects(
-        vc_obj_type="clusters", nb_obj_type="clusters", compare=True
-        )
+    nb.sync_objects(vc_obj_type="clusters", nb_obj_type="clusters", prune=True)
 
 class vCenterHandler:
     """Handles vCenter connection state and export of objects"""
@@ -169,6 +167,7 @@ class NetBoxHandler:
             "interfaces": "dcim",
             "ip_addresses": "ipam",
             "virtual_machines": "virtualization",
+            "tags": "extras",
             }
         # If an existing session is not already found then create it
         # The goal here is session re-use without TCP handshake on every request
@@ -177,7 +176,7 @@ class NetBoxHandler:
             self.nb_session.headers.update(self.header)
         result = None
         # Generate URL
-        url = "{}{}/{}/{}{}".format(
+        url = "{}{}/{}/{}{}{}".format(
             self.nb_api_url,
             obj_families[nb_obj_type],
             nb_obj_type.replace("_", "-"), # Converts to url format
@@ -194,16 +193,17 @@ class NetBoxHandler:
                 req.status_code
                 )
             result = req.json()
-            # NetBox returns 50 results by default, this ensures all results
-            # are bundled together
-            while req.json()["next"] != None:
-                url = req.json()["next"]
-                log.debug(
-                    "NetBox returned more than 50 objects. Sending %s to %s "
-                    "for additional objects.", req_type.upper(), url
-                    )
-                req = getattr(self.nb_session, req_type)(url, timeout=10)
-                result["results"] += req.json()["results"]
+            if req_type == "get":
+                # NetBox returns 50 results by default, this ensures all results
+                # are bundled together
+                while req.json()["next"] != None:
+                    url = req.json()["next"]
+                    log.debug(
+                        "NetBox returned more than 50 objects. Sending %s to "
+                        "%s for additional objects.", req_type.upper(), url
+                        )
+                    req = getattr(self.nb_session, req_type)(url, timeout=10)
+                    result["results"] += req.json()["results"]
         elif req.status_code in [201, 204]:
             log.info(
                 "NetBox successfully %s %s object.",
@@ -236,11 +236,13 @@ class NetBoxHandler:
                     )
             log.debug("Unaccepted request data: %s", data)
         else:
+            #import pdb;pdb.set_trace()
             raise SystemExit(
                 log.critical(
                     "Well this in unexpected. Please report this. "
-                    "%s request received %s status with body '%s'.",
-                    req_type.upper(), req.status_code, data
+                    "%s request received %s status with body '%s' and response "
+                    "'%s'.",
+                    req_type.upper(), req.status_code, data, req.json()
                     )
                 )
         return result
@@ -261,26 +263,32 @@ class NetBoxHandler:
                 data["name"]
                 )
             for key in data:
-                new_value = req["results"][0][key]
+                old_value = req["results"][0][key]
                 # For NetBox relational objects, NetBox returns nested
                 # dictionaries; we parse them using list comprehension and
                 # verify the nested key value pairs match
+                objects_matched = True
                 if isinstance(data[key], dict):
-                    nested_match = all([
-                        data[key][sub_key] == new_value[sub_key]
+                    objects_matched = all([
+                        data[key][sub_key] == old_value[sub_key]
                         for sub_key in data[key]
                         ])
-                # Parse values
-                if data[key] == new_value or nested_match:
+                # Tag orders are not guaranteed so we must parse them separately
+                elif key == "tags":
+                    for tag in data[key]:
+                        if tag not in old_value:
+                            objects_matched = False
+                # Normal value comparisons
+                if data[key] == old_value and objects_matched:
                     log.debug("New and old '%s' values match. Moving on.", key)
-                else:
+                if not objects_matched:
                     log.info(
                         "New and old object values do not match. Updating "
                         "NetBox with the latest object data."
                         )
                     log.debug(
                         "Old %s value is '%s' and new value is '%s'.",
-                        key, data[key], new_value
+                        key, old_value, data[key]
                         )
                     self.request(
                         req_type="put", nb_obj_type=nb_obj_type,
@@ -295,7 +303,7 @@ class NetBoxHandler:
                 )
             self.request(req_type="post", nb_obj_type=nb_obj_type, data=data)
 
-    def sync_objects(self, vc_obj_type, nb_obj_type, compare=False):
+    def sync_objects(self, vc_obj_type, nb_obj_type, prune=False):
         """Collects objects from vCenter and syncs them to NetBox.
         Some object types do not support tags so they will be a one-way sync
         meaning orphaned objects will not be removed from NetBox.
@@ -326,28 +334,32 @@ class NetBoxHandler:
                 nb_obj_type[:-1],
                 "s" if len(vc_objects[nb_obj_type]) != 1 else "",
                 )
-            # When True collect all objects of type from from NetBox, compares
-            # their names to the vCenter objects and go through a
-            # pruning process if they're orphaned
-            if compare:
-                # Collect all NetBox objects of type with vCenter tag
-                nb_objects = self.request(
-                    req_type="get", nb_obj_type=nb_obj_type, tag="vcenter"
-                    )["results"]
-                # Determine whether objects match
-                temp = self.compare_objects(nb_objects, vc_objects)
+            # If pruning is globally enabled and the objects are prunable
+            if settings.NB_PRUNE_ENABLED and prune:
+                self.prune_objects(nb_obj_type, vc_objects)
 
-    def compare_objects(self, nb_objects, vc_objects):
-        """Compares current objects from NetBox to vCenter collected objects.
-        If there are objects that do not match they are returned in a list."""
-        log.info("Comparing vCenter objects to existing NetBox objects.")
-        # For every object type collected from vCenter
-        for nb_obj_type in vc_objects:
-            # Compare the objects of each type
-            for obj in vc_objects[nb_obj_type]:
-                # Build lookup of obj name key to nb_objects.
-                log.debug(obj)
-                import pdb;pdb.set_trace()
+    def prune_objects(self, nb_obj_type, vc_objects):
+        """Collects the current objects from NetBox then compares them to the
+        latest vCenter objects.
+        If there are objects that do not match they go through a pruning
+        process."""
+        nb_objects = self.request(
+            req_type="get", nb_obj_type=nb_obj_type, tag="vcenter"
+            )["results"]
+        log.info(
+            "Comparing existing NetBox %s objects to current vCenter objects.",
+            nb_obj_type[:-1]
+            )
+        # From the vCenter objects provided collect only the names of each
+        # object from the current type we're comparing against
+        vc_obj_names = [obj["name"] for obj in vc_objects[nb_obj_type]]
+        result = [obj for obj in nb_objects if obj["name"] not in vc_obj_names]
+        log.info(
+            "Comparsion completed. %s object%s were unmatched.", len(result),
+            "" if len(result) == 1 else "s"
+            )
+        log.debug("The following objects did not match: %s", result)
+        # Pruned items are given an orphaned tag
 
     def verify_dependencies(self):
         """Validates that all prerequisite objects exist in NetBox"""
@@ -359,7 +371,21 @@ class NetBoxHandler:
                 {"name": "VMware ESXi", "slug": "vmware-esxi"},
                 {"name": "Windows", "slug": "windows"},
                 {"name": "Linux", "slug": "linux"},
-                ]
+                ],
+            "tags": [{
+                "name": "Orphaned",
+                "slug": "orphaned",
+                "color": "607d8b",
+                "comments": "This applies to objects that have become "
+                            "orphaned. The source system which has previously "
+                            "provided the object no longer states it "
+                            "exists.{}".format(
+                                " An object with the 'Orphaned' tag will "
+                                "remain in this state until it ages out and is "
+                                "automatically removed."
+                                ) if settings.NB_PRUNE_ENABLED else ""
+
+                }]
             }
         # For each dependency of each type verify object exists
         log.info("Verifying all prerequisite objects exist in NetBox.")
