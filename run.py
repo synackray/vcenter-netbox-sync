@@ -230,8 +230,9 @@ class NetBoxHandler:
                 raise SystemExit(
                     log.critical(
                         "Well this in unexpected. Please report this. "
-                        "%s request received %s status with body '%s'.",
-                        req_type.upper(), req.status_code, data
+                        "%s request received %s status with body '%s' and "
+                        "response '%s'.",
+                        req_type.upper(), req.status_code, data, req.json()
                         )
                     )
             log.debug("Unaccepted request data: %s", data)
@@ -273,12 +274,17 @@ class NetBoxHandler:
                         data[key][sub_key] == old_value[sub_key]
                         for sub_key in data[key]
                         ])
-                # Tag orders are not guaranteed so we must parse them separately
-                elif key == "tags":
+                # Tag orders are not guaranteed so we must parse them
+                # individually
+                if key == "tags":
+                    # Tags are not matching, cleans up 'Orphaned' if it's
+                    # seen again on vCenter
+                    if len(data[key]) != len(old_value):
+                        objects_matched = False
                     for tag in data[key]:
                         if tag not in old_value:
                             objects_matched = False
-                # Normal value comparisons
+                # Handling results
                 if data[key] == old_value and objects_matched:
                     log.debug("New and old '%s' values match. Moving on.", key)
                 if not objects_matched:
@@ -352,14 +358,31 @@ class NetBoxHandler:
             )
         # From the vCenter objects provided collect only the names of each
         # object from the current type we're comparing against
-        vc_obj_names = [obj["name"] for obj in vc_objects[nb_obj_type]]
-        result = [obj for obj in nb_objects if obj["name"] not in vc_obj_names]
+        vc_obj_names = [obj["name"] for obj in vc_objects[nb_obj_type][:-1]]
+        orphans = [obj for obj in nb_objects if obj["name"] not in vc_obj_names]
         log.info(
-            "Comparsion completed. %s object%s were unmatched.", len(result),
-            "" if len(result) == 1 else "s"
+            "Comparsion completed. %s object%s were unmatched.", len(orphans),
+            "" if len(orphans) == 1 else "s"
             )
-        log.debug("The following objects did not match: %s", result)
-        # Pruned items are given an orphaned tag
+        log.debug("The following objects did not match: %s", orphans)
+        # Pruned items are checked against the prune timer
+        # All pruned items are first tagged so it is clear why they were
+        # deleted, and then those items which are greater than the max age
+        # will be deleted permanently
+        for orphan in orphans:
+            log.info(
+                "Processing %s '%s' object", nb_obj_type[:-1], orphan["name"]
+                )
+            if "Orphaned" not in orphan["tags"]:
+                log.info(
+                    "No tag found. Adding 'Orphaned' tag to %s '%s' object",
+                    nb_obj_type[:-1], orphan["name"]
+                    )
+                self.request(
+                    req_type="patch", nb_obj_type=nb_obj_type,
+                    nb_id=orphan["id"],
+                    data={"tags": ["Synced", "vCenter", "Orphaned"]}
+                    )
 
     def verify_dependencies(self):
         """Validates that all prerequisite objects exist in NetBox"""
