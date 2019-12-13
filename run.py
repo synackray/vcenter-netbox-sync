@@ -3,8 +3,8 @@
 
 import atexit
 from socket import gaierror
+from datetime import date, datetime
 import requests
-from datetime import date
 from pyVim.connect import SmartConnectNoSSL, Disconnect
 from pyVmomi import vim
 import settings
@@ -13,10 +13,20 @@ from logger import log
 
 def main():
     """Main function to run if script is called directly"""
+    start_time = datetime.now()
+    # vc = vCenterHandler()
+    # vc.view_explorer()
     nb = NetBoxHandler()
     nb.verify_dependencies()
     nb.sync_objects(vc_obj_type="datacenters", nb_obj_type="cluster_groups")
     nb.sync_objects(vc_obj_type="clusters", nb_obj_type="clusters", prune=True)
+    nb.sync_objects(vc_obj_type="hosts", nb_obj_type="manufacturers")
+    # nb.sync_objects(vc_obj_type="hosts", nb_obj_type="device_types")
+    # nb.sync_objects(vc_obj_type="hosts", nb_obj_type="device_types")
+    log.info(
+        "Completed! Total execution time %s.",
+        (datetime.now() - start_time)
+        )
 
 class vCenterHandler:
     """Handles vCenter connection state and export of objects"""
@@ -72,23 +82,34 @@ class vCenterHandler:
             )
 
     def get_objects(self, vc_obj_type):
-        """Collects all objects of a type from vCenter"""
+        """Collects all objects of a type from vCenter and then builds objects
+        in the format NetBox expects.
+        NetBox object format should be compliant pass to POST method against the
+        API."""
         results = {}
         log.info("Collecting vCenter %s objects.", vc_obj_type[:-1])
         if vc_obj_type == "datacenters":
             # Initalize keys expected to be returned
-            results["cluster_groups"] = []
-            container_view = self.create_view("datacenters")
+            results.setdefault("cluster_groups", [])
+            container_view = self.create_view(vc_obj_type)
             for obj in container_view.view:
+                log.info(
+                    "Collecting info about vCenter %s '%s' object.",
+                    vc_obj_type, obj.name
+                    )
                 results["cluster_groups"].append(
                     {
                         "name": obj.name, "slug": obj.name.lower()
                     })
         elif vc_obj_type == "clusters":
             # Initalize keys expected to be returned
-            results["clusters"] = []
-            container_view = self.create_view("clusters")
+            results.setdefault("clusters", [])
+            container_view = self.create_view(vc_obj_type)
             for obj in container_view.view:
+                log.info(
+                    "Collecting info about vCenter %s '%s' object.",
+                    vc_obj_type, obj.name
+                    )
                 results["clusters"].append(
                     {
                         "name": obj.name,
@@ -97,7 +118,152 @@ class vCenterHandler:
                         "tags": ["Synced", "vCenter"]
                     })
         elif vc_obj_type == "hosts":
-            pass
+            # Initialize all the NB object types we're going to build
+            nb_objects = [
+                "manufacturers", "device_types", "devices", "interfaces",
+                "ip_addresses"
+                ]
+            for nb_obj in nb_objects:
+                results.setdefault(nb_obj, [])
+            container_view = self.create_view(vc_obj_type)
+            for obj in container_view.view:
+                log.info(
+                    "Collecting info about vCenter %s '%s' object.",
+                    vc_obj_type, obj.name
+                    )
+                # NetBox Manufacturers and Device Types are susceptible to
+                # duplication as they are parents to multiple objects
+                # To avoid unnecessary querying we check to make sure they
+                # haven't already been collected
+                duplicate = {"manufacturers": False, "device_types": False}
+                if obj.summary.hardware.vendor in \
+                [res["name"] for res in results["manufacturers"]]:
+                    duplicate["manufacturers"] = True
+                    log.debug(
+                        "Manufacturers object already exists. Skipping."
+                        )
+                if not duplicate["manufacturers"]:
+                    log.debug(
+                        "Collecting info to create NetBox manufacturers object."
+                        )
+                    results["manufacturers"].append(
+                        {
+                            "name": obj.summary.hardware.vendor,
+                            "slug": obj.summary.hardware.vendor.\
+                                    replace(" ", "-").lower(),
+                        })
+                if obj.summary.hardware.model in \
+                [res["model"] for res in results["device_types"]]:
+                    duplicate["device_types"] = True
+                    log.debug(
+                        "Device Types object already exists. Skipping."
+                        )
+                if not duplicate["device_types"]:
+                    log.debug(
+                        "Collecting info to create NetBox device_types object."
+                        )
+                    results["device_types"].append(
+                        {
+                            "manufacturer": {
+                                "name": obj.summary.hardware.vendor
+                                },
+                            "model": obj.summary.hardware.model,
+                            "slug": obj.summary.hardware.model.\
+                                    replace(" ", "-").lower(),
+                            "part_number": obj.summary.hardware.model,
+                            "tags": ["Synced", "vCenter"]
+                        })
+                log.debug("Collecting info to create NetBox devices object.")
+                results["devices"].append(
+                    {
+                        "name": obj.name,
+                        "device_type": {"model": obj.summary.hardware.model},
+                        "device_role": {"name": "Server"},
+                        "platform": {"name": "VMware ESXi"},
+                        "serial": [ # Scan throw identifiers to find S/N
+                            identifier.identifierValue for identifier
+                            in obj.summary.hardware.otherIdentifyingInfo
+                            if identifier.identifierType.key == \
+                            "EnclosureSerialNumberTag"
+                            ][0],
+                        "asset_tag": [
+                            (identifier.identifierValue
+                             if identifier.identifierValue != "Default string"
+                             else ""
+                            ) for identifier in
+                            obj.summary.hardware.otherIdentifyingInfo
+                            if identifier.identifierType.key == "AssetTag"
+                            ][0],
+                        "cluster": obj.parent.name,
+                        "status": ( # 0 = Offline / 1 = Active
+                            1 if obj.summary.runtime.connectionState == \
+                            "connected"
+                            else 0
+                            ),
+                        "tags": ["Synced", "vCenter"]
+                    })
+                # Iterable object types
+                # Physical Interfaces
+                log.debug("Collecting info to create NetBox interfaces object.")
+                for pnic in obj.config.network.pnic:
+                    log.debug(
+                        "Collect info for physical interface '%s'.", obj.name
+                        )
+                    results["interfaces"].append(
+                        {
+                            "device": obj.name,
+                            # Interface speed is placed in the description as it
+                            # is irrelevant to making connections and an error
+                            # prone mapping process
+                            "type": {"label": "Other"},
+                            "name": pnic.device,
+                            "mac_address": pnic.mac,
+                            "description": ( # I'm sorry :'(
+                                "{}Mbps Physical Interface".format(
+                                    pnic.spec.linkSpeed.speedMb
+                                    ) if pnic.spec.linkSpeed
+                                else "{}Mbps Physical Interface".format(
+                                    pnic.validLinkSpecification[0].speedMb
+                                    )
+                                ),
+                            "enabled": True if pnic.spec.linkSpeed else False,
+                            "tags": ["Synced", "vCenter"]
+                        })
+                # Virtual Interfaces
+                for vnic in obj.config.network.vnic:
+                    log.debug(
+                        "Collect info for virtual interface '%s'.", obj.name
+                        )
+                    results["interfaces"].append(
+                        {
+                            "device": obj.name,
+                            "type": {"label": "Virtual"},
+                            "name": vnic.device,
+                            "mac_address": vnic.spec.mac,
+                            "mtu": vnic.spec.mtu,
+                            "tags": ["Synced", "vCenter"]
+                        })
+                # IP Addresses
+                for ip in obj.config.network.vnic:
+                    log.debug(
+                        "Collect info for IP Address '%s'.",
+                        ip.spec.ip.ipAddress
+                        )
+                    results["interfaces"].append(
+                        {
+                            "address": "{}/{}".format(
+                                ip.spec.ip.ipAddress, ip.spec.ip.subnetMask
+                                ),
+                            "vrf": None, # Collected from prefix
+                            "tenant": None, # Collected from prefix
+                            "interface": {
+                                "device": {
+                                    "name": obj.name
+                                    },
+                                "name": ip.device,
+                                },
+                            "tags": ["Synced", "vCenter"]
+                        })
         elif vc_obj_type == "virtual_machines":
             pass
         else:
@@ -197,7 +363,7 @@ class NetBoxHandler:
             if req_type == "get":
                 # NetBox returns 50 results by default, this ensures all results
                 # are bundled together
-                while req.json()["next"] != None:
+                while req.json()["next"] is not None:
                     url = req.json()["next"]
                     log.debug(
                         "NetBox returned more than 50 objects. Sending %s to "
@@ -207,10 +373,10 @@ class NetBoxHandler:
                     result["results"] += req.json()["results"]
         elif req.status_code in [201, 204]:
             log.info(
-                "NetBox successfully %s %s object.",
-                 "created" if req.status_code == 201 else "deleted",
-                data["name"],
-                nb_obj_type
+                "NetBox successfully %s %s '%s' object.",
+                "created" if req.status_code == 201 else "deleted",
+                nb_obj_type[:-1],
+                data["name"]
                 )
         elif req.status_code == 400:
             if req_type == "post":
@@ -319,31 +485,29 @@ class NetBoxHandler:
             "Initiated sync of vCenter %s objects to NetBox.", vc_obj_type[:-1]
             )
         vc_objects = self.vc.get_objects(vc_obj_type=vc_obj_type)
-        # For each object record for each NetBox object type, pass it to NB
-        for nb_obj_type in vc_objects:
-            log.info(
-                "Starting sync of %s vCenter %s object%s to NetBox %s "
-                "object%s.",
-                len(vc_objects[nb_obj_type]),
-                vc_obj_type[:-1],
-                "s" if len(vc_objects[nb_obj_type]) != 1 else "",
-                nb_obj_type[:-1],
-                "s" if len(vc_objects[nb_obj_type]) != 1 else "",
-                )
-            for obj in vc_objects[nb_obj_type]:
-                self.obj_exists(nb_obj_type=nb_obj_type, data=obj)
-            log.info(
-                "Finished sync of %s vCenter %s object%s to NetBox %s "
-                "object%s.",
-                len(vc_objects[nb_obj_type]),
-                vc_obj_type[:-1],
-                "s" if len(vc_objects[nb_obj_type]) != 1 else "",
-                nb_obj_type[:-1],
-                "s" if len(vc_objects[nb_obj_type]) != 1 else "",
-                )
-            # If pruning is globally enabled and the objects are prunable
-            if settings.NB_PRUNE_ENABLED and prune:
-                self.prune_objects(nb_obj_type, vc_objects)
+        log.info(
+            "Starting sync of %s vCenter %s object%s to NetBox %s "
+            "object%s.",
+            len(vc_objects[nb_obj_type]),
+            vc_obj_type[:-1],
+            "s" if len(vc_objects[nb_obj_type]) != 1 else "",
+            nb_obj_type[:-1],
+            "s" if len(vc_objects[nb_obj_type]) != 1 else "",
+            )
+        for obj in vc_objects[nb_obj_type]:
+            self.obj_exists(nb_obj_type=nb_obj_type, data=obj)
+        log.info(
+            "Finished sync of %s vCenter %s object%s to NetBox %s "
+            "object%s.",
+            len(vc_objects[nb_obj_type]),
+            vc_obj_type[:-1],
+            "s" if len(vc_objects[nb_obj_type]) != 1 else "",
+            nb_obj_type[:-1],
+            "s" if len(vc_objects[nb_obj_type]) != 1 else "",
+            )
+        # If pruning is globally enabled and the objects are prunable
+        if settings.NB_PRUNE_ENABLED and prune:
+            self.prune_objects(nb_obj_type, vc_objects)
 
     def prune_objects(self, nb_obj_type, vc_objects):
         """Collects the current objects from NetBox then compares them to the
@@ -359,7 +523,7 @@ class NetBoxHandler:
             )
         # From the vCenter objects provided collect only the names of each
         # object from the current type we're comparing against
-        vc_obj_names = [obj["name"] for obj in vc_objects[nb_obj_type][:-1]]
+        vc_obj_names = [obj["name"] for obj in vc_objects[nb_obj_type]]
         orphans = [obj for obj in nb_objects if obj["name"] not in vc_obj_names]
         log.info(
             "Comparsion completed. %s object%s were unmatched.", len(orphans),
