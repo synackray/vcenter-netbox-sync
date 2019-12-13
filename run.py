@@ -21,8 +21,10 @@ def main():
     nb.sync_objects(vc_obj_type="datacenters", nb_obj_type="cluster_groups")
     nb.sync_objects(vc_obj_type="clusters", nb_obj_type="clusters", prune=True)
     nb.sync_objects(vc_obj_type="hosts", nb_obj_type="manufacturers")
-    # nb.sync_objects(vc_obj_type="hosts", nb_obj_type="device_types")
-    # nb.sync_objects(vc_obj_type="hosts", nb_obj_type="device_types")
+    nb.sync_objects(vc_obj_type="hosts", nb_obj_type="device_types", prune=True)
+    nb.sync_objects(vc_obj_type="hosts", nb_obj_type="devices", prune=True)
+    nb.sync_objects(vc_obj_type="hosts", nb_obj_type="interfaces", prune=True)
+    nb.sync_objects(vc_obj_type="hosts", nb_obj_type="ip_addresses", prune=True)
     log.info(
         "Completed! Total execution time %s.",
         (datetime.now() - start_time)
@@ -93,26 +95,28 @@ class vCenterHandler:
             results.setdefault("cluster_groups", [])
             container_view = self.create_view(vc_obj_type)
             for obj in container_view.view:
+                obj_name = obj.name
                 log.info(
                     "Collecting info about vCenter %s '%s' object.",
-                    vc_obj_type, obj.name
+                    vc_obj_type, obj_name
                     )
                 results["cluster_groups"].append(
                     {
-                        "name": obj.name, "slug": obj.name.lower()
+                        "name": obj_name, "slug": obj_name.lower()
                     })
         elif vc_obj_type == "clusters":
             # Initalize keys expected to be returned
             results.setdefault("clusters", [])
             container_view = self.create_view(vc_obj_type)
             for obj in container_view.view:
+                obj_name = obj.name
                 log.info(
                     "Collecting info about vCenter %s '%s' object.",
-                    vc_obj_type, obj.name
+                    vc_obj_type, obj_name
                     )
                 results["clusters"].append(
                     {
-                        "name": obj.name,
+                        "name": obj_name,
                         "type": {"name": "VMware ESXi"},
                         "group": {"name": obj.parent.parent.name},
                         "tags": ["Synced", "vCenter"]
@@ -127,16 +131,18 @@ class vCenterHandler:
                 results.setdefault(nb_obj, [])
             container_view = self.create_view(vc_obj_type)
             for obj in container_view.view:
+                obj_name = obj.name
                 log.info(
                     "Collecting info about vCenter %s '%s' object.",
-                    vc_obj_type, obj.name
+                    vc_obj_type, obj_name
                     )
+                obj_manuf_name = obj.summary.hardware.vendor
                 # NetBox Manufacturers and Device Types are susceptible to
                 # duplication as they are parents to multiple objects
                 # To avoid unnecessary querying we check to make sure they
                 # haven't already been collected
                 duplicate = {"manufacturers": False, "device_types": False}
-                if obj.summary.hardware.vendor in \
+                if obj_manuf_name in \
                 [res["name"] for res in results["manufacturers"]]:
                     duplicate["manufacturers"] = True
                     log.debug(
@@ -148,11 +154,12 @@ class vCenterHandler:
                         )
                     results["manufacturers"].append(
                         {
-                            "name": obj.summary.hardware.vendor,
-                            "slug": obj.summary.hardware.vendor.\
+                            "name": obj_manuf_name,
+                            "slug": obj_manuf_name.\
                                     replace(" ", "-").lower(),
                         })
-                if obj.summary.hardware.model in \
+                obj_model = obj.summary.hardware.model
+                if obj_model in \
                 [res["model"] for res in results["device_types"]]:
                     duplicate["device_types"] = True
                     log.debug(
@@ -165,19 +172,19 @@ class vCenterHandler:
                     results["device_types"].append(
                         {
                             "manufacturer": {
-                                "name": obj.summary.hardware.vendor
+                                "name": obj_manuf_name
                                 },
-                            "model": obj.summary.hardware.model,
-                            "slug": obj.summary.hardware.model.\
+                            "model": obj_model,
+                            "slug": obj_model.\
                                     replace(" ", "-").lower(),
-                            "part_number": obj.summary.hardware.model,
+                            "part_number": obj_model,
                             "tags": ["Synced", "vCenter"]
                         })
                 log.debug("Collecting info to create NetBox devices object.")
                 results["devices"].append(
                     {
-                        "name": obj.name,
-                        "device_type": {"model": obj.summary.hardware.model},
+                        "name": obj_name,
+                        "device_type": {"model": obj_model},
                         "device_role": {"name": "Server"},
                         "platform": {"name": "VMware ESXi"},
                         "serial": [ # Scan throw identifiers to find S/N
@@ -207,11 +214,12 @@ class vCenterHandler:
                 log.debug("Collecting info to create NetBox interfaces object.")
                 for pnic in obj.config.network.pnic:
                     log.debug(
-                        "Collect info for physical interface '%s'.", obj.name
+                        "Collect info for physical interface '%s'.", obj_name
                         )
+                    pnic_up = pnic.spec.linkSpeed
                     results["interfaces"].append(
                         {
-                            "device": obj.name,
+                            "device": obj_name,
                             # Interface speed is placed in the description as it
                             # is irrelevant to making connections and an error
                             # prone mapping process
@@ -221,46 +229,47 @@ class vCenterHandler:
                             "description": ( # I'm sorry :'(
                                 "{}Mbps Physical Interface".format(
                                     pnic.spec.linkSpeed.speedMb
-                                    ) if pnic.spec.linkSpeed
+                                    ) if pnic_up
                                 else "{}Mbps Physical Interface".format(
                                     pnic.validLinkSpecification[0].speedMb
                                     )
                                 ),
-                            "enabled": True if pnic.spec.linkSpeed else False,
+                            "enabled": True if pnic_up else False,
                             "tags": ["Synced", "vCenter"]
                         })
                 # Virtual Interfaces
                 for vnic in obj.config.network.vnic:
+                    nic_name = vnic.device
                     log.debug(
-                        "Collect info for virtual interface '%s'.", obj.name
+                        "Collect info for virtual interface '%s'.", obj_name
                         )
                     results["interfaces"].append(
                         {
-                            "device": obj.name,
+                            "device": obj_name,
                             "type": {"label": "Virtual"},
-                            "name": vnic.device,
+                            "name": nic_name,
                             "mac_address": vnic.spec.mac,
                             "mtu": vnic.spec.mtu,
                             "tags": ["Synced", "vCenter"]
                         })
-                # IP Addresses
-                for ip in obj.config.network.vnic:
+                    # IP Addresses
+                    ip_addr = vnic.spec.ip.ipAddress
                     log.debug(
                         "Collect info for IP Address '%s'.",
-                        ip.spec.ip.ipAddress
+                        ip_addr
                         )
                     results["interfaces"].append(
                         {
                             "address": "{}/{}".format(
-                                ip.spec.ip.ipAddress, ip.spec.ip.subnetMask
+                                ip_addr, vnic.spec.ip.subnetMask
                                 ),
                             "vrf": None, # Collected from prefix
                             "tenant": None, # Collected from prefix
                             "interface": {
                                 "device": {
-                                    "name": obj.name
+                                    "name": obj_name
                                     },
-                                "name": ip.device,
+                                "name": nic_name,
                                 },
                             "tags": ["Synced", "vCenter"]
                         })
@@ -277,18 +286,6 @@ class vCenterHandler:
             "s" if len(results) == 1 else "", # Grammar matters
             )
         return results
-
-
-    def get_vms(self):
-        """Collect all Virtual Machines from vCenter"""
-        log.info("Collecting vCenter virtual machine objects.")
-        container_view = self.create_view("virtual_machines")
-        vms = [vm for vm in container_view.view]
-        log.debug(
-            "%s VMs. The first VM is '%s'.", len(vms),
-            vms[0].name
-            )
-        container_view.Destroy()
 
     def view_explorer(self):
         """Interactive view explorer for exploring models"""

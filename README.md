@@ -24,7 +24,7 @@ The following objects are tracked and synced between vCenter and NetBox.
 |------------------|--------------------------------------------|---------------|
 | Datacenters      | Cluster Groups                             | No            |
 | Clusters         | Clusters                                   | Yes           |
-| Hosts            | Manufacturers, Platforms                   | No            |
+| Hosts            | Manufacturers                              | No            |
 | Hosts            | Device Types, Devices, Interfaces          | Yes           |
 | Virtual Machines | Platforms                                  | No            |
 | Virtual Machines | Interfaces, IP Addresses, Virtual Machines | Yes           |
