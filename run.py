@@ -18,13 +18,10 @@ def main():
     # vc.view_explorer()
     nb = NetBoxHandler()
     nb.verify_dependencies()
-    nb.sync_objects(vc_obj_type="datacenters", nb_obj_type="cluster_groups")
-    nb.sync_objects(vc_obj_type="clusters", nb_obj_type="clusters", prune=True)
-    nb.sync_objects(vc_obj_type="hosts", nb_obj_type="manufacturers")
-    nb.sync_objects(vc_obj_type="hosts", nb_obj_type="device_types", prune=True)
-    nb.sync_objects(vc_obj_type="hosts", nb_obj_type="devices", prune=True)
-    nb.sync_objects(vc_obj_type="hosts", nb_obj_type="interfaces", prune=True)
-    nb.sync_objects(vc_obj_type="hosts", nb_obj_type="ip_addresses", prune=True)
+    # nb.sync_objects(vc_obj_type="datacenters")
+    # nb.sync_objects(vc_obj_type="clusters")
+    nb.sync_objects(vc_obj_type="hosts")
+    # nb.sync_objects(vc_obj_type="virtual_machines")
     log.info(
         "Completed! Total execution time %s.",
         (datetime.now() - start_time)
@@ -122,7 +119,7 @@ class vCenterHandler:
                         "tags": ["Synced", "vCenter"]
                     })
         elif vc_obj_type == "hosts":
-            # Initialize all the NB object types we're going to build
+            # Initialize all the NetBox object types we're going to collect
             nb_objects = [
                 "manufacturers", "device_types", "devices", "interfaces",
                 "ip_addresses"
@@ -214,7 +211,7 @@ class vCenterHandler:
                 log.debug("Collecting info to create NetBox interfaces object.")
                 for pnic in obj.config.network.pnic:
                     log.debug(
-                        "Collect info for physical interface '%s'.", obj_name
+                        "Collecting info for physical interface '%s'.", obj_name
                         )
                     pnic_up = pnic.spec.linkSpeed
                     results["interfaces"].append(
@@ -234,14 +231,14 @@ class vCenterHandler:
                                     pnic.validLinkSpecification[0].speedMb
                                     )
                                 ),
-                            "enabled": True if pnic_up else False,
+                            "enabled": bool(pnic_up),
                             "tags": ["Synced", "vCenter"]
                         })
                 # Virtual Interfaces
                 for vnic in obj.config.network.vnic:
                     nic_name = vnic.device
                     log.debug(
-                        "Collect info for virtual interface '%s'.", obj_name
+                        "Collecting info for virtual interface '%s'.", obj_name
                         )
                     results["interfaces"].append(
                         {
@@ -255,7 +252,7 @@ class vCenterHandler:
                     # IP Addresses
                     ip_addr = vnic.spec.ip.ipAddress
                     log.debug(
-                        "Collect info for IP Address '%s'.",
+                        "Collecting info for IP Address '%s'.",
                         ip_addr
                         )
                     results["interfaces"].append(
@@ -274,7 +271,70 @@ class vCenterHandler:
                             "tags": ["Synced", "vCenter"]
                         })
         elif vc_obj_type == "virtual_machines":
-            pass
+            # Initialize all the NetBox object types we're going to collect
+            nb_objects = [
+                "virtual_machines", "interfaces", "ip_addresses"]
+            for nb_obj in nb_objects:
+                results.setdefault(nb_obj, [])
+            container_view = self.create_view(vc_obj_type)
+            for obj in container_view.view:
+                obj_name = obj.name
+                log.info(
+                    "Collecting info about vCenter %s '%s' object.",
+                    vc_obj_type, obj_name
+                    )
+                # Virtual Machines
+                vm_name = obj.name
+                log.debug("Collecting info for virtual machine '%s'", vm_name)
+                vm_family = obj.guest.guestFamily
+                results["virtual_machines"].append(
+                    {
+                        "name": vm_name,
+                        "status": 1 if obj.runtime.powerState == "poweredOn"
+                                  else 0,
+                        "cluster": {"name": obj[0].runtime.host.parent.name},
+                        "role": {"name": "Server"},
+                        # "tenant": {"name": ""},
+                        "platform": {
+                            "name": "Linux" if "linux" in vm_family
+                                    else "Windows" if "windows" in vm_family
+                                    else None}
+                                    if vm_family else {"name": None},
+                        "memory": obj.config.hardware.memoryMB,
+                        "disk": sum([
+                            comp.capacityInKB for comp in obj.config.hardware.device
+                            if isinstance(comp, vim.vm.device.VirtualDisk)
+                            ]) / 1024 / 1024, # Kilobytes to Gigabytes
+                        "vcpus": obj.config.hardware.numCPU,
+                        "tags": ["Synced", "vCenter"]
+                    })
+                # If VMware Tools is not detected then we cannot reliably
+                # collect interfaces and IP addresses
+                if vm_family:
+                    for index, nic in enumerate(obj.guest.net):
+                        # Interfaces
+                        nic_name = "vNIC{}".format(index)
+                        log.debug(
+                            "Collecting info for virtual interface '%s'.",
+                            nic_name
+                            )
+                        results["interfaces"].append(
+                            {
+                                "device": obj.name,
+                                "type": {"label": "Virtual"},
+                                "name": nic_name,
+                                "mac_address": nic.macAddress,
+                                "connection_status": nic.connected,
+                                "tags": ["Synced", "vCenter"]
+                            })
+                        # IP Addresses
+                        log.debug(
+                            "Collecting info for IP Address '%s'.",
+                            ip_addr
+                            )
+                        results["ip_addresses"].append(
+                            {
+                            })
         else:
             raise ValueError(
                 "vCenter object type {} is not valid.".format(vc_obj_type)
@@ -283,7 +343,7 @@ class vCenterHandler:
         log.debug(
             "Collected %s vCenter %s object%s.", len(results),
             vc_obj_type[:-1],
-            "s" if len(results) == 1 else "", # Grammar matters
+            "s" if len(results) != 1 else "", # Grammar matters :)
             )
         return results
 
@@ -316,8 +376,7 @@ class NetBoxHandler:
         self.nb_session = None
         self.vc = vCenterHandler()
 
-    def request(self, req_type, nb_obj_type, data=None, query=None, tag=None,
-                nb_id=None):
+    def request(self, req_type, nb_obj_type, data=None, query=None, nb_id=None):
         """HTTP requests and exception handler for NetBox"""
         # Object family relationships in the API used for url crafting
         obj_families = {
@@ -340,12 +399,11 @@ class NetBoxHandler:
             self.nb_session.headers.update(self.header)
         result = None
         # Generate URL
-        url = "{}{}/{}/{}{}{}".format(
+        url = "{}{}/{}/{}{}".format(
             self.nb_api_url,
             obj_families[nb_obj_type],
             nb_obj_type.replace("_", "-"), # Converts to url format
-            "?name={}".format(query) if query else "",
-            "?tag={}".format(tag) if tag else "",
+            query if query else "",
             "{}/".format(nb_id) if nb_id else ""
             )
         log.debug("Sending %s to %s", req_type.upper(), url)
@@ -373,7 +431,7 @@ class NetBoxHandler:
                 "NetBox successfully %s %s '%s' object.",
                 "created" if req.status_code == 201 else "deleted",
                 nb_obj_type[:-1],
-                data["name"]
+                data["model"] if nb_obj_type == "device_types" else data["name"]
                 )
         elif req.status_code == 400:
             if req_type == "post":
@@ -401,7 +459,6 @@ class NetBoxHandler:
                     )
             log.debug("Unaccepted request data: %s", data)
         else:
-            #import pdb;pdb.set_trace()
             raise SystemExit(
                 log.critical(
                     "Well this in unexpected. Please report this. "
@@ -415,17 +472,19 @@ class NetBoxHandler:
     def obj_exists(self, nb_obj_type, data):
         """Checks if a NetBox object exists and has matching key value pairs.
         If not, the record wil be created or updated."""
+        # NetBox Device Types objects do not have names to query; we catch
+        # and use the model instead
+        query_key = "model" if nb_obj_type == "device_types" else "name"
         req = self.request(
             req_type="get", nb_obj_type=nb_obj_type,
-            query=data["name"]
+            query="?{}={}".format(query_key, data[query_key])
             )
         # A single matching object is found so we compare its values to the new
         # object
         if req["count"] == 1:
             log.debug(
                 "NetBox %s object '%s' already exists. Comparing values.",
-                nb_obj_type,
-                data["name"]
+                nb_obj_type, data[query_key]
                 )
             for key in data:
                 old_value = req["results"][0][key]
@@ -468,43 +527,53 @@ class NetBoxHandler:
                     break
         else:
             log.info(
-                "Object '%s' in %s not found.", data["name"],
+                "Object '%s' in %s not found.",
+                data[query_key],
                 nb_obj_type
                 )
             self.request(req_type="post", nb_obj_type=nb_obj_type, data=data)
 
-    def sync_objects(self, vc_obj_type, nb_obj_type, prune=False):
+    def sync_objects(self, vc_obj_type):
         """Collects objects from vCenter and syncs them to NetBox.
         Some object types do not support tags so they will be a one-way sync
         meaning orphaned objects will not be removed from NetBox.
         """
+        # NetBox objects which support pruning
+        prunable_obj_types = [
+            "clusters", "device_types", "devices", "virtual_machines", "interfaces", "ip_addresses"
+            ]
+        # Collect data from vCenter
         log.info(
-            "Initiated sync of vCenter %s objects to NetBox.", vc_obj_type[:-1]
+            "Initiated sync of vCenter %s objects to NetBox.",
+            vc_obj_type[:-1]
             )
         vc_objects = self.vc.get_objects(vc_obj_type=vc_obj_type)
-        log.info(
-            "Starting sync of %s vCenter %s object%s to NetBox %s "
-            "object%s.",
-            len(vc_objects[nb_obj_type]),
-            vc_obj_type[:-1],
-            "s" if len(vc_objects[nb_obj_type]) != 1 else "",
-            nb_obj_type[:-1],
-            "s" if len(vc_objects[nb_obj_type]) != 1 else "",
-            )
-        for obj in vc_objects[nb_obj_type]:
-            self.obj_exists(nb_obj_type=nb_obj_type, data=obj)
-        log.info(
-            "Finished sync of %s vCenter %s object%s to NetBox %s "
-            "object%s.",
-            len(vc_objects[nb_obj_type]),
-            vc_obj_type[:-1],
-            "s" if len(vc_objects[nb_obj_type]) != 1 else "",
-            nb_obj_type[:-1],
-            "s" if len(vc_objects[nb_obj_type]) != 1 else "",
-            )
-        # If pruning is globally enabled and the objects are prunable
-        if settings.NB_PRUNE_ENABLED and prune:
-            self.prune_objects(nb_obj_type, vc_objects)
+        # Determine each NetBox object type collected from vCenter
+        nb_obj_types = [obj for obj in vc_objects]
+        for nb_obj_type in nb_obj_types:
+            log.info(
+                "Starting sync of %s vCenter %s object%s to NetBox %s "
+                "object%s.",
+                len(vc_objects[nb_obj_type]),
+                vc_obj_type[:-1],
+                "s" if len(vc_objects[nb_obj_type]) != 1 else "",
+                nb_obj_type[:-1],
+                "s" if len(vc_objects[nb_obj_type]) != 1 else "",
+                )
+            for obj in vc_objects[nb_obj_type]:
+                self.obj_exists(nb_obj_type=nb_obj_type, data=obj)
+            log.info(
+                "Finished sync of %s vCenter %s object%s to NetBox %s "
+                "object%s.",
+                len(vc_objects[nb_obj_type]),
+                vc_obj_type[:-1],
+                "s" if len(vc_objects[nb_obj_type]) != 1 else "",
+                nb_obj_type[:-1],
+                "s" if len(vc_objects[nb_obj_type]) != 1 else "",
+                )
+            # If pruning is globally enabled and the objects are prunable
+            if settings.NB_PRUNE_ENABLED and nb_obj_type in prunable_obj_types:
+                self.prune_objects(nb_obj_type, vc_objects)
 
     def prune_objects(self, nb_obj_type, vc_objects):
         """Collects the current objects from NetBox then compares them to the
@@ -512,19 +581,22 @@ class NetBoxHandler:
         If there are objects that do not match they go through a pruning
         process."""
         nb_objects = self.request(
-            req_type="get", nb_obj_type=nb_obj_type, tag="vcenter"
+            req_type="get", nb_obj_type=nb_obj_type, query="?tag=vcenter"
             )["results"]
         log.info(
             "Comparing existing NetBox %s objects to current vCenter objects.",
             nb_obj_type[:-1]
             )
-        # From the vCenter objects provided collect only the names of each
-        # object from the current type we're comparing against
-        vc_obj_names = [obj["name"] for obj in vc_objects[nb_obj_type]]
-        orphans = [obj for obj in nb_objects if obj["name"] not in vc_obj_names]
+        # From the vCenter objects provided collect only the names/models of
+        # each object from the current type we're comparing against
+        query_key = "model" if nb_obj_type == "device_types" else "name"
+        vc_obj_values = [obj[query_key] for obj in vc_objects[nb_obj_type]]
+        orphans = [
+            obj for obj in nb_objects if obj[query_key] not in vc_obj_values
+            ]
         log.info(
             "Comparsion completed. %s object%s were unmatched.", len(orphans),
-            "" if len(orphans) == 1 else "s"
+            "s" if len(orphans) != 1 else ""
             )
         log.debug("The following objects did not match: %s", orphans)
         # Pruned items are checked against the prune timer
@@ -533,12 +605,12 @@ class NetBoxHandler:
         # will be deleted permanently
         for orphan in orphans:
             log.info(
-                "Processing %s '%s' object", nb_obj_type[:-1], orphan["name"]
+                "Processing %s '%s' object", nb_obj_type[:-1], orphan[query_key]
                 )
             if "Orphaned" not in orphan["tags"]:
                 log.info(
                     "No tag found. Adding 'Orphaned' tag to %s '%s' object",
-                    nb_obj_type[:-1], orphan["name"]
+                    nb_obj_type[:-1], orphan[query_key]
                     )
                 self.request(
                     req_type="patch", nb_obj_type=nb_obj_type,
@@ -560,7 +632,7 @@ class NetBoxHandler:
                 log.info(
                     "The %s '%s' object has exceeded the %s day max for "
                     "orphaned objects. Sending it for deletion.",
-                    nb_obj_type[:-1], orphan["name"],
+                    nb_obj_type[:-1], orphan[query_key],
                     settings.NB_PRUNE_DELAY_DAYS
                     )
                 self.request(
@@ -571,7 +643,7 @@ class NetBoxHandler:
                 log.info(
                     "The %s '%s' object has been orphaned for %s of %s max "
                     "days. Proceeding to next object.",
-                    nb_obj_type[:-1], orphan["name"], days_orphaned,
+                    nb_obj_type[:-1], orphan[query_key], days_orphaned,
                     settings.NB_PRUNE_DELAY_DAYS
                     )
 
