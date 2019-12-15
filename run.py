@@ -18,10 +18,10 @@ def main():
     # vc.view_explorer()
     nb = NetBoxHandler()
     nb.verify_dependencies()
-    # nb.sync_objects(vc_obj_type="datacenters")
-    # nb.sync_objects(vc_obj_type="clusters")
+    nb.sync_objects(vc_obj_type="datacenters")
+    nb.sync_objects(vc_obj_type="clusters")
     nb.sync_objects(vc_obj_type="hosts")
-    # nb.sync_objects(vc_obj_type="virtual_machines")
+    nb.sync_objects(vc_obj_type="virtual_machines")
     log.info(
         "Completed! Total execution time %s.",
         (datetime.now() - start_time)
@@ -198,7 +198,7 @@ class vCenterHandler:
                             obj.summary.hardware.otherIdentifyingInfo
                             if identifier.identifierType.key == "AssetTag"
                             ][0],
-                        "cluster": obj.parent.name,
+                        "cluster": {"name": obj.parent.name},
                         "status": ( # 0 = Offline / 1 = Active
                             1 if obj.summary.runtime.connectionState == \
                             "connected"
@@ -320,7 +320,7 @@ class vCenterHandler:
                             )
                         results["interfaces"].append(
                             {
-                                "device": obj.name,
+                                "device": {"name": obj.name},
                                 "type": {"label": "Virtual"},
                                 "name": nic_name,
                                 "mac_address": nic.macAddress,
@@ -328,13 +328,17 @@ class vCenterHandler:
                                 "tags": ["Synced", "vCenter"]
                             })
                         # IP Addresses
-                        log.debug(
-                            "Collecting info for IP Address '%s'.",
-                            ip_addr
-                            )
-                        results["ip_addresses"].append(
-                            {
-                            })
+                        for ip in nic:
+                            ip_addr = "{}/{}".format(
+                                ip.ipAddress, ip.prefixLength
+                                )
+                            log.debug(
+                                "Collecting info for IP Address '%s'.",
+                                ip_addr
+                                )
+                            results["ip_addresses"].append(
+                                {
+                                })
         else:
             raise ValueError(
                 "vCenter object type {} is not valid.".format(vc_obj_type)
@@ -512,8 +516,8 @@ class NetBoxHandler:
                     log.debug("New and old '%s' values match. Moving on.", key)
                 if not objects_matched:
                     log.info(
-                        "New and old object values do not match. Updating "
-                        "NetBox with the latest object data."
+                        "New and old '%s' object values do not match. Updating "
+                        "NetBox with the latest object data.", key
                         )
                     log.debug(
                         "Old %s value is '%s' and new value is '%s'.",
