@@ -184,6 +184,7 @@ class vCenterHandler:
                         "device_type": {"model": obj_model},
                         "device_role": {"name": "Server"},
                         "platform": {"name": "VMware ESXi"},
+                        "site": {"name": "vCenter"},
                         "serial": [ # Scan throw identifiers to find S/N
                             identifier.identifierValue for identifier
                             in obj.summary.hardware.otherIdentifyingInfo
@@ -210,18 +211,20 @@ class vCenterHandler:
                 # Physical Interfaces
                 log.debug("Collecting info to create NetBox interfaces object.")
                 for pnic in obj.config.network.pnic:
+                    nic_name = pnic.device
                     log.debug(
-                        "Collecting info for physical interface '%s'.", obj_name
+                        "Collecting info for physical interface '%s'.",
+                        nic_name
                         )
                     pnic_up = pnic.spec.linkSpeed
                     results["interfaces"].append(
                         {
-                            "device": obj_name,
+                            "device": {"name": obj_name},
                             # Interface speed is placed in the description as it
                             # is irrelevant to making connections and an error
                             # prone mapping process
-                            "type": {"label": "Other"},
-                            "name": pnic.device,
+                            "type": 32767, # 32767 = Other
+                            "name": nic_name,
                             "mac_address": pnic.mac,
                             "description": ( # I'm sorry :'(
                                 "{}Mbps Physical Interface".format(
@@ -238,12 +241,12 @@ class vCenterHandler:
                 for vnic in obj.config.network.vnic:
                     nic_name = vnic.device
                     log.debug(
-                        "Collecting info for virtual interface '%s'.", obj_name
+                        "Collecting info for virtual interface '%s'.", nic_name
                         )
                     results["interfaces"].append(
                         {
-                            "device": obj_name,
-                            "type": {"label": "Virtual"},
+                            "device": {"name": obj_name},
+                            "type": 0, # 0 = Virtual
                             "name": nic_name,
                             "mac_address": vnic.spec.mac,
                             "mtu": vnic.spec.mtu,
@@ -378,24 +381,26 @@ class NetBoxHandler:
             (":{}".format(settings.NB_PORT) if settings.NB_PORT != 443 else "")
             )
         self.nb_session = None
+        # Object type relationships when working in the API and browing the
+        # object data structures
+        self.obj_map = {
+            "cluster_groups": {"api_path": "virtualization", "key": "name"},
+            "cluster_types": {"api_path": "virtualization", "key": "name"},
+            "clusters": {"api_path": "virtualization", "key": "name"},
+            "manufacturers": {"api_path": "dcim", "key": "name"},
+            "platforms": {"api_path": "dcim", "key": "name"},
+            "sites": {"api_path": "dcim", "key": "name"},
+            "device_types": {"api_path": "dcim", "key": "model"},
+            "devices": {"api_path": "dcim", "key": "name"},
+            "interfaces": {"api_path": "dcim", "key": "name"},
+            "ip_addresses": {"api_path": "ipam", "key": "name"},
+            "virtual_machines": {"api_path": "virtualization", "key": "name"},
+            "tags": {"api_path": "extras", "key": "name"},
+            }
         self.vc = vCenterHandler()
 
     def request(self, req_type, nb_obj_type, data=None, query=None, nb_id=None):
         """HTTP requests and exception handler for NetBox"""
-        # Object family relationships in the API used for url crafting
-        obj_families = {
-            "cluster_groups": "virtualization",
-            "cluster_types": "virtualization",
-            "clusters": "virtualization",
-            "manufacturers": "dcim",
-            "platforms": "dcim",
-            "device_types": "dcim",
-            "devices": "dcim",
-            "interfaces": "dcim",
-            "ip_addresses": "ipam",
-            "virtual_machines": "virtualization",
-            "tags": "extras",
-            }
         # If an existing session is not already found then create it
         # The goal here is session re-use without TCP handshake on every request
         if not self.nb_session:
@@ -405,7 +410,7 @@ class NetBoxHandler:
         # Generate URL
         url = "{}{}/{}/{}{}".format(
             self.nb_api_url,
-            obj_families[nb_obj_type],
+            self.obj_map[nb_obj_type]["api_path"],
             nb_obj_type.replace("_", "-"), # Converts to url format
             query if query else "",
             "{}/".format(nb_id) if nb_id else ""
@@ -478,10 +483,23 @@ class NetBoxHandler:
         If not, the record wil be created or updated."""
         # NetBox Device Types objects do not have names to query; we catch
         # and use the model instead
-        query_key = "model" if nb_obj_type == "device_types" else "name"
+        query_key = self.obj_map[nb_obj_type]["key"]
+        try:
+            data[query_key]
+        except KeyError:
+            log.debug("Key error for %s with key %s.", nb_obj_type, query_key)
+            import pdb;pdb.set_trace()
+        # Create a query specific to the device parent/child relationship when
+        # working with interfaces
+        if nb_obj_type == "interfaces":
+            query = "?device={}&{}={}".format(
+                data["device"], query_key, data[query_key]
+                )
+        else:
+            query = "?{}={}".format(query_key, data[query_key])
         req = self.request(
             req_type="get", nb_obj_type=nb_obj_type,
-            query="?{}={}".format(query_key, data[query_key])
+            query=query
             )
         # A single matching object is found so we compare its values to the new
         # object
@@ -523,6 +541,7 @@ class NetBoxHandler:
                         "Old %s value is '%s' and new value is '%s'.",
                         key, old_value, data[key]
                         )
+                    log.debug("Creating HTTP PUT for object data '%s'.", data)
                     self.request(
                         req_type="put", nb_obj_type=nb_obj_type,
                         nb_id=req["results"][0]["id"],
@@ -593,7 +612,7 @@ class NetBoxHandler:
             )
         # From the vCenter objects provided collect only the names/models of
         # each object from the current type we're comparing against
-        query_key = "model" if nb_obj_type == "device_types" else "name"
+        query_key = self.obj_map[nb_obj_type]["key"]
         vc_obj_values = [obj[query_key] for obj in vc_objects[nb_obj_type]]
         orphans = [
             obj for obj in nb_objects if obj[query_key] not in vc_obj_values
@@ -662,6 +681,13 @@ class NetBoxHandler:
                 {"name": "Windows", "slug": "windows"},
                 {"name": "Linux", "slug": "linux"},
                 ],
+            "sites": [{
+                "name": "vCenter",
+                "slug": "vcenter",
+                "comments": "A default virtual site created to house objects "
+                            "that have been synced from vCenter.",
+                "tags": ["Synced", "vCenter"]
+                }],
             "tags": [{
                 "name": "Orphaned",
                 "slug": "orphaned",
