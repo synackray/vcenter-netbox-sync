@@ -4,6 +4,7 @@
 import atexit
 from socket import gaierror
 from datetime import date, datetime
+from ipaddress import ip_network
 import requests
 from pyVim.connect import SmartConnectNoSSL, Disconnect
 from pyVmomi import vim
@@ -26,6 +27,44 @@ def main():
         "Completed! Total execution time %s.",
         (datetime.now() - start_time)
         )
+
+def format_ip(ip_addr):
+    """Formats IPv4 addresses to IP with CIDR standard notation. This is used
+    to ensure equal comparsion against exists NetBox IP Address objects."""
+    ip, mask = ip_addr.split("/")
+    cidr = ip_network(ip_addr, strict=False).prefixlen
+    result = "{}/{}".format(ip,cidr)
+    log.debug("Converted '%s' to CIDR notation '%s'.", ip_addr, result)
+    return result
+
+def verify_ip(ip_addr):
+    """Verify IP address received is valid and within the allowed networks
+    networks provided in the settings file."""
+    result = False
+    try:
+        log.info(
+            "Validating IP '%s' is properly formatted and within allowed "
+            "networks.",
+            ip_addr
+            )
+        # Strict is set to false to allow host address checks
+        version = ip_network(ip_addr, strict=False).version
+        global_nets = settings.IPV4_ALLOWED if version == 4 \
+                      else settings.IPV6_ALLOWED
+        # Check whether the network is within the global allowed networks
+        log.debug(
+            "Checking whether IP address '%s' is within %s.", ip_addr,
+            global_nets
+            )
+        net_matches = [
+            ip_network(ip_addr, strict=False).overlaps(ip_network(net))
+            for net in global_nets
+            ]
+        result = any(net_matches)
+    except ValueError as err:
+        log.debug("Validation of %s failed. Received error: %s", ip_addr, err)
+    log.debug("IP '%s' validation returned a %s status.", ip_addr, result)
+    return result
 
 class vCenterHandler:
     """Handles vCenter connection state and export of objects"""
@@ -295,7 +334,7 @@ class vCenterHandler:
                         "name": vm_name,
                         "status": 1 if obj.runtime.powerState == "poweredOn"
                                   else 0,
-                        "cluster": {"name": obj[0].runtime.host.parent.name},
+                        "cluster": {"name": obj.runtime.host.parent.name},
                         "role": {"name": "Server"},
                         # "tenant": {"name": ""},
                         "platform": {
@@ -305,7 +344,8 @@ class vCenterHandler:
                                     if vm_family else {"name": None},
                         "memory": obj.config.hardware.memoryMB,
                         "disk": sum([
-                            comp.capacityInKB for comp in obj.config.hardware.device
+                            comp.capacityInKB for comp in
+                            obj.config.hardware.device
                             if isinstance(comp, vim.vm.device.VirtualDisk)
                             ]) / 1024 / 1024, # Kilobytes to Gigabytes
                         "vcpus": obj.config.hardware.numCPU,
@@ -487,8 +527,8 @@ class NetBoxHandler:
             log.info(
                 "NetBox successfully %s %s '%s' object.",
                 "created" if req.status_code == 201 else "deleted",
-                nb_obj_type[:-1],
-                data[self.obj_map[nb_obj_type]["key"]]
+                nb_obj_type,
+                data
                 )
         elif req.status_code == 400:
             if req_type == "post":
@@ -621,20 +661,38 @@ class NetBoxHandler:
                 "Starting sync of %s vCenter %s object%s to NetBox %s "
                 "object%s.",
                 len(vc_objects[nb_obj_type]),
-                vc_obj_type[:-1],
+                vc_obj_type,
                 "s" if len(vc_objects[nb_obj_type]) != 1 else "",
-                nb_obj_type[:-1],
+                nb_obj_type,
                 "s" if len(vc_objects[nb_obj_type]) != 1 else "",
                 )
             for obj in vc_objects[nb_obj_type]:
+                # Check to ensure IP addresses pass all checks before syncing
+                # to NetBox
+                if nb_obj_type == "ip_addresses":
+                    ip_addr = obj["address"]
+                    if verify_ip(ip_addr):
+                        log.debug(
+                            "IP %s has passed necessary pre-checks.",
+                            ip_addr
+                            )
+                        # Update IP address to CIDR notation for comparsion
+                        # with existing NetBox objects
+                        obj["address"] = format_ip(ip_addr)
+                    else:
+                        log.info(
+                            "IP %s has failed necessary pre-checks. Skipping "
+                            "sync to NetBox.", ip_addr,
+                            )
+                        continue
                 self.obj_exists(nb_obj_type=nb_obj_type, data=obj)
             log.info(
                 "Finished sync of %s vCenter %s object%s to NetBox %s "
                 "object%s.",
                 len(vc_objects[nb_obj_type]),
-                vc_obj_type[:-1],
+                vc_obj_type,
                 "s" if len(vc_objects[nb_obj_type]) != 1 else "",
-                nb_obj_type[:-1],
+                nb_obj_type,
                 "s" if len(vc_objects[nb_obj_type]) != 1 else "",
                 )
             # If pruning is globally enabled and the objects are prunable
@@ -651,7 +709,7 @@ class NetBoxHandler:
             )["results"]
         log.info(
             "Comparing existing NetBox %s objects to current vCenter objects.",
-            nb_obj_type[:-1]
+            nb_obj_type
             )
         # From the vCenter objects provided collect only the names/models of
         # each object from the current type we're comparing against
@@ -671,12 +729,12 @@ class NetBoxHandler:
         # will be deleted permanently
         for orphan in orphans:
             log.info(
-                "Processing %s '%s' object", nb_obj_type[:-1], orphan[query_key]
+                "Processing %s '%s' object", nb_obj_type, orphan[query_key]
                 )
             if "Orphaned" not in orphan["tags"]:
                 log.info(
                     "No tag found. Adding 'Orphaned' tag to %s '%s' object",
-                    nb_obj_type[:-1], orphan[query_key]
+                    nb_obj_type, orphan[query_key]
                     )
                 self.request(
                     req_type="patch", nb_obj_type=nb_obj_type,
@@ -698,7 +756,7 @@ class NetBoxHandler:
                 log.info(
                     "The %s '%s' object has exceeded the %s day max for "
                     "orphaned objects. Sending it for deletion.",
-                    nb_obj_type[:-1], orphan[query_key],
+                    nb_obj_type, orphan[query_key],
                     settings.NB_PRUNE_DELAY_DAYS
                     )
                 self.request(
@@ -709,7 +767,7 @@ class NetBoxHandler:
                 log.info(
                     "The %s '%s' object has been orphaned for %s of %s max "
                     "days. Proceeding to next object.",
-                    nb_obj_type[:-1], orphan[query_key], days_orphaned,
+                    nb_obj_type, orphan[query_key], days_orphaned,
                     settings.NB_PRUNE_DELAY_DAYS
                     )
 
