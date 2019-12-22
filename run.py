@@ -194,7 +194,7 @@ class vCenterHandler:
                         "asset_tag": [
                             (identifier.identifierValue
                              if identifier.identifierValue != "Default string"
-                             else ""
+                             else None
                             ) for identifier in
                             obj.summary.hardware.otherIdentifyingInfo
                             if identifier.identifierType.key == "AssetTag"
@@ -258,7 +258,7 @@ class vCenterHandler:
                         "Collecting info for IP Address '%s'.",
                         ip_addr
                         )
-                    results["interfaces"].append(
+                    results["ip_addresses"].append(
                         {
                             "address": "{}/{}".format(
                                 ip_addr, vnic.spec.ip.subnetMask
@@ -381,21 +381,69 @@ class NetBoxHandler:
             (":{}".format(settings.NB_PORT) if settings.NB_PORT != 443 else "")
             )
         self.nb_session = None
-        # Object type relationships when working in the API and browing the
+        # Object type relationships when working in the API and browsing the
         # object data structures
         self.obj_map = {
-            "cluster_groups": {"api_path": "virtualization", "key": "name"},
-            "cluster_types": {"api_path": "virtualization", "key": "name"},
-            "clusters": {"api_path": "virtualization", "key": "name"},
-            "manufacturers": {"api_path": "dcim", "key": "name"},
-            "platforms": {"api_path": "dcim", "key": "name"},
-            "sites": {"api_path": "dcim", "key": "name"},
-            "device_types": {"api_path": "dcim", "key": "model"},
-            "devices": {"api_path": "dcim", "key": "name"},
-            "interfaces": {"api_path": "dcim", "key": "name"},
-            "ip_addresses": {"api_path": "ipam", "key": "name"},
-            "virtual_machines": {"api_path": "virtualization", "key": "name"},
-            "tags": {"api_path": "extras", "key": "name"},
+            "cluster_groups": {
+                "api_path": "virtualization",
+                "key": "name",
+                "prune": False
+                },
+            "cluster_types": {
+                "api_path": "virtualization",
+                "key": "name",
+                "prune": False
+                },
+            "clusters": {
+                "api_path": "virtualization",
+                "key": "name",
+                "prune": True
+                },
+            "manufacturers": {
+                "api_path": "dcim",
+                "key": "name",
+                "prune": False
+                },
+            "platforms": {
+                "api_path": "dcim",
+                "key": "name",
+                "prune": False
+                },
+            "sites": {
+                "api_path": "dcim",
+                "key": "name",
+                "prune": False
+                },
+            "device_types": {
+                "api_path": "dcim",
+                "key": "model",
+                "prune": True
+                },
+            "devices": {
+                "api_path": "dcim",
+                "key": "name",
+                "prune": True
+                },
+            "interfaces": {
+                "api_path": "dcim",
+                "key": "name",
+                "prune": True
+                },
+            "ip_addresses": {
+                "api_path": "ipam",
+                "key": "address",
+                "prune": True
+                },
+            "virtual_machines": {
+                "api_path": "virtualization",
+                "key": "name",
+                "prune": True
+                },
+            "tags": {
+                "api_path": "extras",
+                "key": "name",
+                "prune": False
+                },
             }
         self.vc = vCenterHandler()
 
@@ -440,7 +488,7 @@ class NetBoxHandler:
                 "NetBox successfully %s %s '%s' object.",
                 "created" if req.status_code == 201 else "deleted",
                 nb_obj_type[:-1],
-                data["model"] if nb_obj_type == "device_types" else data["name"]
+                data[self.obj_map[nb_obj_type]["key"]]
                 )
         elif req.status_code == 400:
             if req_type == "post":
@@ -493,7 +541,7 @@ class NetBoxHandler:
         # working with interfaces
         if nb_obj_type == "interfaces":
             query = "?device={}&{}={}".format(
-                data["device"], query_key, data[query_key]
+                data["device"]["name"], query_key, data[query_key]
                 )
         else:
             query = "?{}={}".format(query_key, data[query_key])
@@ -541,7 +589,6 @@ class NetBoxHandler:
                         "Old %s value is '%s' and new value is '%s'.",
                         key, old_value, data[key]
                         )
-                    log.debug("Creating HTTP PUT for object data '%s'.", data)
                     self.request(
                         req_type="put", nb_obj_type=nb_obj_type,
                         nb_id=req["results"][0]["id"],
@@ -561,10 +608,6 @@ class NetBoxHandler:
         Some object types do not support tags so they will be a one-way sync
         meaning orphaned objects will not be removed from NetBox.
         """
-        # NetBox objects which support pruning
-        prunable_obj_types = [
-            "clusters", "device_types", "devices", "virtual_machines", "interfaces", "ip_addresses"
-            ]
         # Collect data from vCenter
         log.info(
             "Initiated sync of vCenter %s objects to NetBox.",
@@ -595,7 +638,7 @@ class NetBoxHandler:
                 "s" if len(vc_objects[nb_obj_type]) != 1 else "",
                 )
             # If pruning is globally enabled and the objects are prunable
-            if settings.NB_PRUNE_ENABLED and nb_obj_type in prunable_obj_types:
+            if settings.NB_PRUNE_ENABLED and self.obj_map[nb_obj_type]["prune"]:
                 self.prune_objects(nb_obj_type, vc_objects)
 
     def prune_objects(self, nb_obj_type, vc_objects):
