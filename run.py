@@ -33,7 +33,7 @@ def format_ip(ip_addr):
     to ensure equal comparsion against exists NetBox IP Address objects."""
     ip, mask = ip_addr.split("/")
     cidr = ip_network(ip_addr, strict=False).prefixlen
-    result = "{}/{}".format(ip,cidr)
+    result = "{}/{}".format(ip, cidr)
     log.debug("Converted '%s' to CIDR notation '%s'.", ip_addr, result)
     return result
 
@@ -572,11 +572,6 @@ class NetBoxHandler:
         # NetBox Device Types objects do not have names to query; we catch
         # and use the model instead
         query_key = self.obj_map[nb_obj_type]["key"]
-        try:
-            data[query_key]
-        except KeyError:
-            log.debug("Key error for %s with key %s.", nb_obj_type, query_key)
-            import pdb;pdb.set_trace()
         # Create a query specific to the device parent/child relationship when
         # working with interfaces
         if nb_obj_type == "interfaces":
@@ -597,28 +592,62 @@ class NetBoxHandler:
                 nb_obj_type, data[query_key]
                 )
             for key in data:
-                old_value = req["results"][0][key]
+                old_data = req["results"][0][key]
                 # For NetBox relational objects, NetBox returns nested
                 # dictionaries; we parse them using list comprehension and
                 # verify the nested key value pairs match
                 objects_matched = True
                 if isinstance(data[key], dict):
-                    objects_matched = all([
-                        data[key][sub_key] == old_value[sub_key]
-                        for sub_key in data[key]
-                        ])
+                    for mid_key in data[key]:
+                        # Track the current key no matter the level for logs
+                        curr_key = mid_key
+                        curr_val = data[key][mid_key]
+                        old_val = old_data[mid_key]
+                        # Keep going down the nested k/v pairs.
+                        if isinstance(data[key][mid_key], dict):
+                            # This should be the deepest level.
+                            for low_key in data[key][mid_key]:
+                                curr_val = data[key][mid_key][low_key]
+                                old_val = old_data[mid_key][low_key]
+                                if curr_val == old_val:
+                                    log.debug(
+                                        "New and old '%s' nested values match. "
+                                        "Moving on.", low_key
+                                        )
+                                else:
+                                    objects_matched = False
+                                    curr_key = low_key
+                                    break
+                        elif curr_val != old_val:
+                            objects_matched = False
+                            curr_key = mid_key
+                            break
+                        # Check if deeper nested elements detected a mismatch
+                        # There's no need to continue if mis-matched
+                        if not objects_matched:
+                            log.debug(
+                                "Object nested %s values do not match. Old "
+                                "value is '%s' and new value is '%s'.",
+                                curr_key, old_val, curr_val
+                                )
+                            break
+                        else:
+                            log.debug(
+                                "New and old '%s' nested values match. Moving "
+                                "on.", curr_key
+                                )
                 # Tag orders are not guaranteed so we must parse them
                 # individually
-                if key == "tags":
+                elif key == "tags":
                     # Tags are not matching, cleans up 'Orphaned' if it's
                     # seen again on vCenter
-                    if len(data[key]) != len(old_value):
+                    if len(data[key]) != len(old_data):
                         objects_matched = False
                     for tag in data[key]:
-                        if tag not in old_value:
+                        if tag not in old_data:
                             objects_matched = False
                 # Handling results
-                if data[key] == old_value and objects_matched:
+                if data[key] == old_data and objects_matched:
                     log.debug("New and old '%s' values match. Moving on.", key)
                 if not objects_matched:
                     log.info(
@@ -627,7 +656,7 @@ class NetBoxHandler:
                         )
                     log.debug(
                         "Old %s value is '%s' and new value is '%s'.",
-                        key, old_value, data[key]
+                        key, old_data, data[key]
                         )
                     self.request(
                         req_type="put", nb_obj_type=nb_obj_type,
