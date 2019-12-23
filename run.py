@@ -22,7 +22,7 @@ def main():
     nb.sync_objects(vc_obj_type="datacenters")
     nb.sync_objects(vc_obj_type="clusters")
     nb.sync_objects(vc_obj_type="hosts")
-    nb.sync_objects(vc_obj_type="virtual_machines")
+    # nb.sync_objects(vc_obj_type="virtual_machines")
     log.info(
         "Completed! Total execution time %s.",
         (datetime.now() - start_time)
@@ -31,7 +31,7 @@ def main():
 def format_ip(ip_addr):
     """Formats IPv4 addresses to IP with CIDR standard notation. This is used
     to ensure equal comparsion against exists NetBox IP Address objects."""
-    ip, mask = ip_addr.split("/")
+    ip = ip_addr.split("/")[0]
     cidr = ip_network(ip_addr, strict=False).prefixlen
     result = "{}/{}".format(ip, cidr)
     log.debug("Converted '%s' to CIDR notation '%s'.", ip_addr, result)
@@ -372,15 +372,25 @@ class vCenterHandler:
                             })
                         # IP Addresses
                         for ip in nic:
-                            ip_addr = "{}/{}".format(
-                                ip.ipAddress, ip.prefixLength
-                                )
+                            ip_addr = ip.ipAddress
                             log.debug(
                                 "Collecting info for IP Address '%s'.",
                                 ip_addr
                                 )
                             results["ip_addresses"].append(
                                 {
+                                    "address": "{}/{}".format(
+                                        ip_addr, vnic.spec.ip.subnetMask
+                                        ),
+                                    "vrf": None, # Collected from prefix
+                                    "tenant": None, # Collected from prefix
+                                    "interface": {
+                                        "device": {
+                                            "name": obj_name
+                                            },
+                                        "name": nic_name,
+                                        },
+                                    "tags": ["Synced", "vCenter"]
                                 })
         else:
             raise ValueError(
@@ -439,21 +449,6 @@ class NetBoxHandler:
                 "key": "name",
                 "prune": True
                 },
-            "manufacturers": {
-                "api_path": "dcim",
-                "key": "name",
-                "prune": False
-                },
-            "platforms": {
-                "api_path": "dcim",
-                "key": "name",
-                "prune": False
-                },
-            "sites": {
-                "api_path": "dcim",
-                "key": "name",
-                "prune": False
-                },
             "device_types": {
                 "api_path": "dcim",
                 "key": "model",
@@ -473,6 +468,26 @@ class NetBoxHandler:
                 "api_path": "ipam",
                 "key": "address",
                 "prune": True
+                },
+            "manufacturers": {
+                "api_path": "dcim",
+                "key": "name",
+                "prune": False
+                },
+            "platforms": {
+                "api_path": "dcim",
+                "key": "name",
+                "prune": False
+                },
+            "prefixes": {
+                "api_path": "ipam",
+                "key": "prefix",
+                "prune": False
+                },
+            "sites": {
+                "api_path": "dcim",
+                "key": "name",
+                "prune": False
                 },
             "virtual_machines": {
                 "api_path": "virtualization",
@@ -598,30 +613,44 @@ class NetBoxHandler:
                 # verify the nested key value pairs match
                 objects_matched = True
                 if isinstance(data[key], dict):
-                    for mid_key in data[key]:
-                        # Track the current key no matter the level for logs
-                        curr_key = mid_key
-                        curr_val = data[key][mid_key]
-                        old_val = old_data[mid_key]
+                    for lvl1_key in data[key]:
+                        log.debug(
+                            "Object comparisons matched nested dictionary "
+                            "check. Moving into level 1 nested values."
+                            )
                         # Keep going down the nested k/v pairs.
-                        if isinstance(data[key][mid_key], dict):
+                        if isinstance(data[key][lvl1_key], dict):
                             # This should be the deepest level.
-                            for low_key in data[key][mid_key]:
-                                curr_val = data[key][mid_key][low_key]
-                                old_val = old_data[mid_key][low_key]
+                            for lvl2_key in data[key][lvl1_key]:
+                                log.debug(
+                                    "Object comparisons matched nested  "
+                                    "dictionary check. Moving into level 2 "
+                                    "nested values."
+                                    )
+                                curr_val = data[key][lvl1_key][lvl2_key]
+                                old_val = old_data[lvl1_key][lvl2_key]
                                 if curr_val == old_val:
                                     log.debug(
                                         "New and old '%s' nested values match. "
-                                        "Moving on.", low_key
+                                        "Moving on.", lvl2_key
                                         )
                                 else:
                                     objects_matched = False
-                                    curr_key = low_key
+                                    curr_key = lvl2_key
                                     break
-                        elif curr_val != old_val:
+                        # Handles situations where NetBox returns None for a
+                        # nested value but we have a current value
+                        elif old_data is None and curr_val is not None:
                             objects_matched = False
-                            curr_key = mid_key
                             break
+                        else:
+                            curr_key = lvl1_key
+                            curr_val = data[key][lvl1_key]
+                            old_val = old_data[lvl1_key]
+                            # Handle normal level 1 flat values
+                            if curr_val != old_val:
+                                objects_matched = False
+                                break
                         # Check if deeper nested elements detected a mismatch
                         # There's no need to continue if mis-matched
                         if not objects_matched:
@@ -708,6 +737,11 @@ class NetBoxHandler:
                         # Update IP address to CIDR notation for comparsion
                         # with existing NetBox objects
                         obj["address"] = format_ip(ip_addr)
+                        # Search for parent prefix to assign VRF and tenancy
+                        prefix = self.search_prefix(obj["address"])
+                        # Update placeholder values with matched values
+                        obj["vrf"] = prefix["vrf"]
+                        obj["tenant"] = prefix["tenant"]
                     else:
                         log.info(
                             "IP %s has failed necessary pre-checks. Skipping "
@@ -799,6 +833,34 @@ class NetBoxHandler:
                     nb_obj_type, orphan[query_key], days_orphaned,
                     settings.NB_PRUNE_DELAY_DAYS
                     )
+
+    def search_prefix(self, ip_addr):
+        """Searches for the parent prefix of any supplied IP address.
+        Returns dictionary of VRF and tenant values."""
+        result = {"tenant": None, "vrf": None}
+        query = "?prefix={}".format(ip_addr)
+        try:
+            prefix_obj = self.request(
+                req_type="get", nb_obj_type="prefixes", query=query
+                )["results"][-1] # -1 used to choose the most specific result
+            prefix = prefix_obj["prefix"]
+            for key in result:
+                # Ensure the data returned was not null.
+                try:
+                    result[key] = {"name": prefix_obj[key]["name"]}
+                except TypeError:
+                    log.debug(
+                        "No %s key was found in the parent prefix. Nulling.",
+                        key
+                        )
+                    result[key] = None
+            log.debug(
+                "IP address %s is a child of prefix %s with the following "
+                "attributes: %s", ip_addr, prefix, result
+                )
+        except IndexError:
+            log.debug("No parent prefix was found for IP %s.", ip_addr)
+        return result
 
     def verify_dependencies(self):
         """Validates that all prerequisite objects exist in NetBox"""
