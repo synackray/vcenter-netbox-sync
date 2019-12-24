@@ -376,11 +376,7 @@ class vCenterHandler:
             for nb_obj in nb_objects:
                 results.setdefault(nb_obj, [])
             container_view = self.create_view(vc_obj_type)
-            count = 1 # DEBUG
             for obj in container_view.view:
-                count += 1 # DEBUG
-                if count > 5:
-                    break
                 obj_name = obj.name
                 log.info(
                     "Collecting info about vCenter %s '%s' object.",
@@ -708,6 +704,13 @@ class NetBoxHandler:
                     req_type="put", nb_obj_type=nb_obj_type, data=vc_data,
                     nb_id=nb_data["id"]
                     )
+        elif req["count"] > 1:
+            log.warning(
+                "Search for NetBox %s object '%s' returned %s results but "
+                "should have only returned 1. Please manually review and "
+                "report this if the data is accurate. Skipping for safety.",
+                nb_obj_type, vc_data[query_key], req["count"]
+                )
         else:
             log.info(
                 "Object '%s' in %s not found.",
