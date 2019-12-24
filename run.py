@@ -61,8 +61,8 @@ def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
                     dict1_path, dict1[key], dict2_path, dict2[key]
                     )
                 result = False
-        # Hack for NetBox v2.6.7 requiring status integer
-        elif key == "status":
+        # Hack for NetBox v2.6.7 requiring integers for some values
+        elif key in ["status", "type"]:
             if dict1[key] != dict2[key]["value"]:
                 log.debug(
                     "Mismatch: %s value is '%s' while %s value is '%s'.",
@@ -320,7 +320,8 @@ class vCenterHandler:
                             # prone mapping process
                             "type": 32767, # 32767 = Other
                             "name": nic_name,
-                            "mac_address": pnic.mac,
+                            # Capitalized to match NetBox format
+                            "mac_address": pnic.mac.upper(),
                             "description": ( # I'm sorry :'(
                                 "{}Mbps Physical Interface".format(
                                     pnic.spec.linkSpeed.speedMb
@@ -343,7 +344,7 @@ class vCenterHandler:
                             "device": {"name": obj_name},
                             "type": 0, # 0 = Virtual
                             "name": nic_name,
-                            "mac_address": vnic.spec.mac,
+                            "mac_address": vnic.spec.mac.upper(),
                             "mtu": vnic.spec.mtu,
                             "tags": ["Synced", "vCenter"]
                         })
@@ -422,7 +423,7 @@ class vCenterHandler:
                                 "virtual_machine": {"name": obj.name},
                                 "type": 0, # 0 = Virtual
                                 "name": nic_name,
-                                "mac_address": nic.macAddress,
+                                "mac_address": nic.macAddress.upper(),
                                 "enabled": nic.connected,
                                 "tags": ["Synced", "vCenter"]
                             })
@@ -691,12 +692,12 @@ class NetBoxHandler:
             if compare_dicts(
                     vc_data, nb_data, dict1_name="vc_data",
                     dict2_name="nb_data"):
-                log.debug(
-                    "NetBox %s object '%s' match current values.",
+                log.info(
+                    "NetBox %s object '%s' match current values. Moving on.",
                     nb_obj_type, vc_data[query_key]
                     )
             else:
-                log.debug(
+                log.info(
                     "NetBox %s object '%s' do not match current values.",
                     nb_obj_type, vc_data[query_key]
                     )
