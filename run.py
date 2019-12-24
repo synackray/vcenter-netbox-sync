@@ -28,6 +28,62 @@ def main():
         (datetime.now() - start_time)
         )
 
+def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
+    """Compares the key value pairs of two dictionaries and returns whether
+    the values match or not."""
+    # Setup paths to track key exploration. The path parameter is used to allow
+    # recursive comparisions and track what's being compared.
+    result = True
+    for key in dict1.keys():
+        dict1_path = "{}{}[{}]".format(dict1_name, path, key)
+        dict2_path = "{}{}[{}]".format(dict2_name, path, key)
+        if key not in dict2.keys():
+            log.debug("%s not a valid key in %s.", dict1_path, dict2_path)
+            result = False
+            break
+        elif isinstance(dict1[key], dict) and isinstance(dict2[key], dict):
+            log.debug(
+                "%s and %s contain dictionary. Evaluating.", dict1_path,
+                dict2_path
+                )
+            compare_dicts(
+                dict1[key], dict2[key], dict1_name, dict2_name,
+                path="[{}]".format(key)
+                )
+        elif isinstance(dict1[key], list) and isinstance(dict2[key], list):
+            log.debug(
+                "%s and %s key '%s' contains list. Validating dict1 items "
+                "exist in dict2.", dict1_path, dict2_path, key
+                )
+            if not all([bool(item in dict2[key]) for item in dict1[key]]):
+                log.debug(
+                    "Mismatch: %s value is '%s' while %s value is '%s'.",
+                    dict1_path, dict1[key], dict2_path, dict2[key]
+                    )
+                result = False
+        # Hack for NetBox v2.6.7 requiring status integer
+        elif key == "status":
+            if dict1[key] != dict2[key]["value"]:
+                log.debug(
+                    "Mismatch: %s value is '%s' while %s value is '%s'.",
+                    dict1_path, dict1[key], dict2_path, dict2[key]["value"]
+                    )
+                result = False
+        elif dict1[key] != dict2[key]:
+            log.debug(
+                "Mismatch: %s value is '%s' while %s value is '%s'.",
+                dict1_path, dict1[key], dict2_path, dict2[key]
+                )
+            result = False
+        if not result:
+            log.debug(
+                "%s and %s values do not match.", dict1_path, dict2_path
+                )
+            break
+        else:
+            log.debug("%s and %s values match.", dict1_path, dict2_path)
+    return result
+
 def format_ip(ip_addr):
     """Formats IPv4 addresses to IP with CIDR standard notation. This is used
     to ensure equal comparsion against exists NetBox IP Address objects."""
@@ -320,7 +376,11 @@ class vCenterHandler:
             for nb_obj in nb_objects:
                 results.setdefault(nb_obj, [])
             container_view = self.create_view(vc_obj_type)
+            count = 1 # DEBUG
             for obj in container_view.view:
+                count += 1 # DEBUG
+                if count > 5:
+                    break
                 obj_name = obj.name
                 log.info(
                     "Collecting info about vCenter %s '%s' object.",
@@ -337,18 +397,17 @@ class vCenterHandler:
                                   else 0,
                         "cluster": {"name": obj.runtime.host.parent.name},
                         "role": {"name": "Server"},
-                        # "tenant": {"name": ""},
                         "platform": {
                             "name": "Linux" if "linux" in vm_family
                                     else "Windows" if "windows" in vm_family
                                     else None}
-                                    if vm_family else {"name": None},
+                                    if vm_family else None,
                         "memory": obj.config.hardware.memoryMB,
-                        "disk": sum([
+                        "disk": int(sum([
                             comp.capacityInKB for comp in
                             obj.config.hardware.device
                             if isinstance(comp, vim.vm.device.VirtualDisk)
-                            ]) / 1024 / 1024, # Kilobytes to Gigabytes
+                            ]) / 1024 / 1024), # Kilobytes to Gigabytes
                         "vcpus": obj.config.hardware.numCPU,
                         "tags": ["Synced", "vCenter"]
                     })
@@ -601,7 +660,7 @@ class NetBoxHandler:
                 )
         return result
 
-    def obj_exists(self, nb_obj_type, data):
+    def obj_exists(self, nb_obj_type, vc_data):
         """Checks if a NetBox object exists and has matching key value pairs.
         If not, the record wil be created or updated."""
         # NetBox Device Types objects do not have names to query; we catch
@@ -611,125 +670,53 @@ class NetBoxHandler:
         # working with interfaces
         if nb_obj_type == "interfaces":
             query = "?device={}&{}={}".format(
-                data["device"]["name"], query_key, data[query_key]
+                vc_data["device"]["name"], query_key, vc_data[query_key]
                 )
         elif nb_obj_type == "virtual_interfaces":
             query = "?virtual_machine={}&{}={}".format(
-                data["virtual_machine"]["name"], query_key, data[query_key]
+                vc_data["virtual_machine"]["name"], query_key,
+                vc_data[query_key]
                 )
         else:
-            query = "?{}={}".format(query_key, data[query_key])
+            query = "?{}={}".format(query_key, vc_data[query_key])
         req = self.request(
             req_type="get", nb_obj_type=nb_obj_type,
             query=query
             )
         # A single matching object is found so we compare its values to the new
         # object
+        send_request = False
         if req["count"] == 1:
             log.debug(
                 "NetBox %s object '%s' already exists. Comparing values.",
-                nb_obj_type, data[query_key]
+                nb_obj_type, vc_data[query_key]
                 )
-            for key in data:
-                old_data = req["results"][0][key]
-                # For NetBox relational objects, NetBox returns nested
-                # dictionaries; we parse them using list comprehension and
-                # verify the nested key value pairs match
-                objects_matched = True
-                if isinstance(data[key], dict):
-                    for lvl1_key in data[key]:
-                        log.debug(
-                            "Object comparisons matched nested dictionary "
-                            "check. Moving into level 1 nested values."
-                            )
-                        curr_key = lvl1_key
-                        # Keep going down the nested k/v pairs.
-                        if isinstance(data[key][lvl1_key], dict):
-                            # This should be the deepest level.
-                            for lvl2_key in data[key][lvl1_key]:
-                                log.debug(
-                                    "Object comparisons matched nested  "
-                                    "dictionary check. Moving into level 2 "
-                                    "nested values."
-                                    )
-                                # Handles situations where NetBox returns None
-                                # for a nested value but we have a current value
-                                if old_data is None and curr_val is not None:
-                                    objects_matched = False
-                                    break
-                                # Process level 2 compares
-                                curr_val = data[key][lvl1_key][lvl2_key]
-                                old_val = old_data[lvl1_key][lvl2_key]
-                                if curr_val == old_val:
-                                    log.debug(
-                                        "New and old '%s' nested values match. "
-                                        "Moving on.", lvl2_key
-                                        )
-                                else:
-                                    objects_matched = False
-                                    curr_key = lvl2_key
-                                    break
-                        # Handles situations where NetBox returns None for a
-                        # nested value but we have a current value
-                        elif old_data is None and curr_val is not None:
-                            objects_matched = False
-                            break
-                        else:
-                            curr_val = data[key][lvl1_key]
-                            old_val = old_data[lvl1_key]
-                            # Handle normal level 1 flat values
-                            if curr_val != old_val:
-                                objects_matched = False
-                                break
-                        # Check if deeper nested elements detected a mismatch
-                        # There's no need to continue if mis-matched
-                        if not objects_matched:
-                            log.debug(
-                                "Object nested %s values do not match. Old "
-                                "value is '%s' and new value is '%s'.",
-                                curr_key, old_val, curr_val
-                                )
-                            break
-                        else:
-                            log.debug(
-                                "New and old '%s' nested values match. Moving "
-                                "on.", curr_key
-                                )
-                # Tag orders are not guaranteed so we must parse them
-                # individually
-                elif key == "tags":
-                    # Tags are not matching, cleans up 'Orphaned' if it's
-                    # seen again on vCenter
-                    if len(data[key]) != len(old_data):
-                        objects_matched = False
-                    for tag in data[key]:
-                        if tag not in old_data:
-                            objects_matched = False
-                # Handling results
-                if data[key] == old_data and objects_matched:
-                    log.debug("New and old '%s' values match. Moving on.", key)
-                if not objects_matched:
-                    log.info(
-                        "New and old '%s' object values do not match. Updating "
-                        "NetBox with the latest object data.", key
-                        )
-                    log.debug(
-                        "Old %s value is '%s' and new value is '%s'.",
-                        key, old_data, data[key]
-                        )
-                    self.request(
-                        req_type="put", nb_obj_type=nb_obj_type,
-                        nb_id=req["results"][0]["id"],
-                        data=data
-                        )
-                    break
+            nb_data = req["results"][0]
+            if compare_dicts(
+                    vc_data, nb_data, dict1_name="vc_data",
+                    dict2_name="nb_data"):
+                log.debug(
+                    "NetBox %s object '%s' match current values.",
+                    nb_obj_type, vc_data[query_key]
+                    )
+            else:
+                log.debug(
+                    "NetBox %s object '%s' do not match current values.",
+                    nb_obj_type, vc_data[query_key]
+                    )
+                self.request(
+                    req_type="put", nb_obj_type=nb_obj_type, data=vc_data,
+                    nb_id=nb_data["id"]
+                    )
         else:
             log.info(
                 "Object '%s' in %s not found.",
-                data[query_key],
+                vc_data[query_key],
                 nb_obj_type
                 )
-            self.request(req_type="post", nb_obj_type=nb_obj_type, data=data)
+            self.request(
+                req_type="post", nb_obj_type=nb_obj_type, data=vc_data
+                )
 
     def sync_objects(self, vc_obj_type):
         """Collects objects from vCenter and syncs them to NetBox.
@@ -778,7 +765,7 @@ class NetBoxHandler:
                             "sync to NetBox.", ip_addr,
                             )
                         continue
-                self.obj_exists(nb_obj_type=nb_obj_type, data=obj)
+                self.obj_exists(nb_obj_type=nb_obj_type, vc_data=obj)
             log.info(
                 "Finished sync of %s vCenter %s object%s to NetBox %s "
                 "object%s.",
@@ -932,7 +919,7 @@ class NetBoxHandler:
                 "Checking NetBox has necessary %s objects.", dep_type[:-1]
                 )
             for dep in dependencies[dep_type]:
-                self.obj_exists(nb_obj_type=dep_type, data=dep)
+                self.obj_exists(nb_obj_type=dep_type, vc_data=dep)
         log.info("Finished verifying prerequisites.")
 
 
