@@ -19,10 +19,10 @@ def main():
     # vc.view_explorer()
     nb = NetBoxHandler()
     nb.verify_dependencies()
-    nb.sync_objects(vc_obj_type="datacenters")
-    nb.sync_objects(vc_obj_type="clusters")
-    nb.sync_objects(vc_obj_type="hosts")
-    # nb.sync_objects(vc_obj_type="virtual_machines")
+    # nb.sync_objects(vc_obj_type="datacenters")
+    # nb.sync_objects(vc_obj_type="clusters")
+    # nb.sync_objects(vc_obj_type="hosts")
+    nb.sync_objects(vc_obj_type="virtual_machines")
     log.info(
         "Completed! Total execution time %s.",
         (datetime.now() - start_time)
@@ -315,7 +315,8 @@ class vCenterHandler:
         elif vc_obj_type == "virtual_machines":
             # Initialize all the NetBox object types we're going to collect
             nb_objects = [
-                "virtual_machines", "interfaces", "ip_addresses"]
+                "virtual_machines", "virtual_interfaces", "ip_addresses",
+                ]
             for nb_obj in nb_objects:
                 results.setdefault(nb_obj, [])
             container_view = self.create_view(vc_obj_type)
@@ -361,17 +362,17 @@ class vCenterHandler:
                             "Collecting info for virtual interface '%s'.",
                             nic_name
                             )
-                        results["interfaces"].append(
+                        results["virtual_interfaces"].append(
                             {
-                                "device": {"name": obj.name},
-                                "type": {"label": "Virtual"},
+                                "virtual_machine": {"name": obj.name},
+                                "type": 0, # 0 = Virtual
                                 "name": nic_name,
                                 "mac_address": nic.macAddress,
-                                "connection_status": nic.connected,
+                                "enabled": nic.connected,
                                 "tags": ["Synced", "vCenter"]
                             })
                         # IP Addresses
-                        for ip in nic:
+                        for ip in nic.ipConfig.ipAddress:
                             ip_addr = ip.ipAddress
                             log.debug(
                                 "Collecting info for IP Address '%s'.",
@@ -380,12 +381,12 @@ class vCenterHandler:
                             results["ip_addresses"].append(
                                 {
                                     "address": "{}/{}".format(
-                                        ip_addr, vnic.spec.ip.subnetMask
+                                        ip_addr, ip.prefixLength
                                         ),
                                     "vrf": None, # Collected from prefix
                                     "tenant": None, # Collected from prefix
                                     "interface": {
-                                        "device": {
+                                        "virtual_machine": {
                                             "name": obj_name
                                             },
                                         "name": nic_name,
@@ -435,69 +436,88 @@ class NetBoxHandler:
         # object data structures
         self.obj_map = {
             "cluster_groups": {
-                "api_path": "virtualization",
+                "api_app": "virtualization",
+                "api_model": "cluster-groups",
                 "key": "name",
                 "prune": False
                 },
             "cluster_types": {
-                "api_path": "virtualization",
+                "api_app": "virtualization",
+                "api_model": "cluster-types",
                 "key": "name",
                 "prune": False
                 },
             "clusters": {
-                "api_path": "virtualization",
+                "api_app": "virtualization",
+                "api_model": "clusters",
                 "key": "name",
                 "prune": True
                 },
             "device_types": {
-                "api_path": "dcim",
+                "api_app": "dcim",
+                "api_model": "device-types",
                 "key": "model",
                 "prune": True
                 },
             "devices": {
-                "api_path": "dcim",
+                "api_app": "dcim",
+                "api_model": "devices",
                 "key": "name",
                 "prune": True
                 },
             "interfaces": {
-                "api_path": "dcim",
+                "api_app": "dcim",
+                "api_model": "interfaces",
                 "key": "name",
                 "prune": True
                 },
             "ip_addresses": {
-                "api_path": "ipam",
+                "api_app": "ipam",
+                "api_model": "ip-addresses",
                 "key": "address",
                 "prune": True
                 },
             "manufacturers": {
-                "api_path": "dcim",
+                "api_app": "dcim",
+                "api_model": "manufacturers",
                 "key": "name",
                 "prune": False
                 },
             "platforms": {
-                "api_path": "dcim",
+                "api_app": "dcim",
+                "api_model": "platforms",
                 "key": "name",
                 "prune": False
                 },
             "prefixes": {
-                "api_path": "ipam",
+                "api_app": "ipam",
+                "api_model": "prefixes",
                 "key": "prefix",
                 "prune": False
                 },
             "sites": {
-                "api_path": "dcim",
+                "api_app": "dcim",
+                "api_model": "sites",
+                "key": "name",
+                "prune": False
+                },
+            "tags": {
+                "api_app": "extras",
+                "api_model": "tags",
                 "key": "name",
                 "prune": False
                 },
             "virtual_machines": {
-                "api_path": "virtualization",
+                "api_app": "virtualization",
+                "api_model": "virtual-machines",
                 "key": "name",
                 "prune": True
                 },
-            "tags": {
-                "api_path": "extras",
+            "virtual_interfaces": {
+                "api_app": "virtualization",
+                "api_model": "interfaces",
                 "key": "name",
-                "prune": False
+                "prune": True
                 },
             }
         self.vc = vCenterHandler()
@@ -513,8 +533,8 @@ class NetBoxHandler:
         # Generate URL
         url = "{}{}/{}/{}{}".format(
             self.nb_api_url,
-            self.obj_map[nb_obj_type]["api_path"],
-            nb_obj_type.replace("_", "-"), # Converts to url format
+            self.obj_map[nb_obj_type]["api_app"], # App that model falls under
+            self.obj_map[nb_obj_type]["api_model"], # Data model
             query if query else "",
             "{}/".format(nb_id) if nb_id else ""
             )
@@ -593,6 +613,10 @@ class NetBoxHandler:
             query = "?device={}&{}={}".format(
                 data["device"]["name"], query_key, data[query_key]
                 )
+        elif nb_obj_type == "virtual_interfaces":
+            query = "?virtual_machine={}&{}={}".format(
+                data["virtual_machine"]["name"], query_key, data[query_key]
+                )
         else:
             query = "?{}={}".format(query_key, data[query_key])
         req = self.request(
@@ -618,6 +642,7 @@ class NetBoxHandler:
                             "Object comparisons matched nested dictionary "
                             "check. Moving into level 1 nested values."
                             )
+                        curr_key = lvl1_key
                         # Keep going down the nested k/v pairs.
                         if isinstance(data[key][lvl1_key], dict):
                             # This should be the deepest level.
@@ -627,6 +652,12 @@ class NetBoxHandler:
                                     "dictionary check. Moving into level 2 "
                                     "nested values."
                                     )
+                                # Handles situations where NetBox returns None
+                                # for a nested value but we have a current value
+                                if old_data is None and curr_val is not None:
+                                    objects_matched = False
+                                    break
+                                # Process level 2 compares
                                 curr_val = data[key][lvl1_key][lvl2_key]
                                 old_val = old_data[lvl1_key][lvl2_key]
                                 if curr_val == old_val:
@@ -644,7 +675,6 @@ class NetBoxHandler:
                             objects_matched = False
                             break
                         else:
-                            curr_key = lvl1_key
                             curr_val = data[key][lvl1_key]
                             old_val = old_data[lvl1_key]
                             # Handle normal level 1 flat values
@@ -759,8 +789,8 @@ class NetBoxHandler:
                 "s" if len(vc_objects[nb_obj_type]) != 1 else "",
                 )
             # If pruning is globally enabled and the objects are prunable
-            if settings.NB_PRUNE_ENABLED and self.obj_map[nb_obj_type]["prune"]:
-                self.prune_objects(nb_obj_type, vc_objects)
+            # if settings.NB_PRUNE_ENABLED and self.obj_map[nb_obj_type]["prune"]:
+            #     self.prune_objects(nb_obj_type, vc_objects)
 
     def prune_objects(self, nb_obj_type, vc_objects):
         """Collects the current objects from NetBox then compares them to the
