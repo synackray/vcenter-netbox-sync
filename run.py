@@ -19,9 +19,9 @@ def main():
     # vc.view_explorer()
     nb = NetBoxHandler()
     nb.verify_dependencies()
-    # nb.sync_objects(vc_obj_type="datacenters")
-    # nb.sync_objects(vc_obj_type="clusters")
-    # nb.sync_objects(vc_obj_type="hosts")
+    nb.sync_objects(vc_obj_type="datacenters")
+    nb.sync_objects(vc_obj_type="clusters")
+    nb.sync_objects(vc_obj_type="hosts")
     nb.sync_objects(vc_obj_type="virtual_machines")
     log.info(
         "Completed! Total execution time %s.",
@@ -495,85 +495,92 @@ class NetBoxHandler:
                 "api_app": "virtualization",
                 "api_model": "cluster-groups",
                 "key": "name",
-                "prune": False
+                "prune": False,
                 },
             "cluster_types": {
                 "api_app": "virtualization",
                 "api_model": "cluster-types",
                 "key": "name",
-                "prune": False
+                "prune": False,
                 },
             "clusters": {
                 "api_app": "virtualization",
                 "api_model": "clusters",
                 "key": "name",
-                "prune": True
+                "prune": True,
+                "prune_pref": 1
                 },
             "device_types": {
                 "api_app": "dcim",
                 "api_model": "device-types",
                 "key": "model",
-                "prune": True
+                "prune": True,
+                "prune_pref": 2
                 },
             "devices": {
                 "api_app": "dcim",
                 "api_model": "devices",
                 "key": "name",
-                "prune": True
+                "prune": True,
+                "prune_pref": 3
                 },
             "interfaces": {
                 "api_app": "dcim",
                 "api_model": "interfaces",
                 "key": "name",
-                "prune": True
+                "prune": True,
+                "prune_pref": 4
                 },
             "ip_addresses": {
                 "api_app": "ipam",
                 "api_model": "ip-addresses",
                 "key": "address",
-                "prune": True
+                "prune": True,
+                "prune_pref": 7
                 },
             "manufacturers": {
                 "api_app": "dcim",
                 "api_model": "manufacturers",
                 "key": "name",
-                "prune": False
+                "prune": False,
                 },
             "platforms": {
                 "api_app": "dcim",
                 "api_model": "platforms",
                 "key": "name",
-                "prune": False
+                "prune": False,
                 },
             "prefixes": {
                 "api_app": "ipam",
                 "api_model": "prefixes",
                 "key": "prefix",
-                "prune": False
+                "prune": False,
                 },
             "sites": {
                 "api_app": "dcim",
                 "api_model": "sites",
                 "key": "name",
-                "prune": False
+                "prune": False,
                 },
             "tags": {
                 "api_app": "extras",
                 "api_model": "tags",
                 "key": "name",
-                "prune": False
+                "prune": False,
                 },
             "virtual_machines": {
                 "api_app": "virtualization",
                 "api_model": "virtual-machines",
                 "key": "name",
-                "prune": True
+                "prune": True,
+                "prune_pref": 5
                 },
             "virtual_interfaces": {
                 "api_app": "virtualization",
                 "api_model": "interfaces",
                 "key": "name",
-                "prune": True
+                "prune": True,
+                "prune_pref": 6
                 },
             }
         self.vc = vCenterHandler()
@@ -779,81 +786,90 @@ class NetBoxHandler:
                 nb_obj_type,
                 "s" if len(vc_objects[nb_obj_type]) != 1 else "",
                 )
-            # If pruning is globally enabled and the objects are prunable
-            # if settings.NB_PRUNE_ENABLED and self.obj_map[nb_obj_type]["prune"]:
-            #     self.prune_objects(nb_obj_type, vc_objects)
+        # Send vCenter objects to the pruner
+        if settings.NB_PRUNE_ENABLED:
+            self.prune_objects(vc_objects)
 
-    def prune_objects(self, nb_obj_type, vc_objects):
+    def prune_objects(self, vc_objects):
         """Collects the current objects from NetBox then compares them to the
         latest vCenter objects.
         If there are objects that do not match they go through a pruning
         process."""
-        nb_objects = self.request(
-            req_type="get", nb_obj_type=nb_obj_type, query="?tag=vcenter"
-            )["results"]
-        log.info(
-            "Comparing existing NetBox %s objects to current vCenter objects.",
-            nb_obj_type
+        # Determine qualifying object types based on object map
+        nb_obj_types = [t for t in vc_objects if self.obj_map[t]["prune"]]
+        # Sort qualify NetBox object types by prune priority. This ensures
+        # we do not have issues with deleting due to orphaned dependencies.
+        nb_obj_types = sorted(
+            nb_obj_types, key=lambda t: self.obj_map[t]["prune_pref"],
+            reverse=True
             )
-        # From the vCenter objects provided collect only the names/models of
-        # each object from the current type we're comparing against
-        query_key = self.obj_map[nb_obj_type]["key"]
-        vc_obj_values = [obj[query_key] for obj in vc_objects[nb_obj_type]]
-        orphans = [
-            obj for obj in nb_objects if obj[query_key] not in vc_obj_values
-            ]
-        log.info(
-            "Comparsion completed. %s object%s were unmatched.", len(orphans),
-            "s" if len(orphans) != 1 else ""
-            )
-        log.debug("The following objects did not match: %s", orphans)
-        # Pruned items are checked against the prune timer
-        # All pruned items are first tagged so it is clear why they were
-        # deleted, and then those items which are greater than the max age
-        # will be deleted permanently
-        for orphan in orphans:
+        for nb_obj_type in nb_obj_types:
+            nb_objects = self.request(
+                req_type="get", nb_obj_type=nb_obj_type, query="?tag=vcenter"
+                )["results"]
             log.info(
-                "Processing %s '%s' object", nb_obj_type, orphan[query_key]
+                "Comparing existing NetBox %s objects to current vCenter "
+                "objects.", nb_obj_type
                 )
-            if "Orphaned" not in orphan["tags"]:
-                log.info(
-                    "No tag found. Adding 'Orphaned' tag to %s '%s' object",
-                    nb_obj_type, orphan[query_key]
-                    )
-                self.request(
-                    req_type="patch", nb_obj_type=nb_obj_type,
-                    nb_id=orphan["id"],
-                    data={"tags": ["Synced", "vCenter", "Orphaned"]}
-                    )
-            # Check if the orphan has gone past the max prune timer and needs
-            # to be deleted
-            # Dates are in YY, MM, DD format
-            current_date = date.today()
-            modified_date = date(
-                int(orphan["last_updated"][:4]), # Year
-                int(orphan["last_updated"][5:7]), # Month
-                int(orphan["last_updated"][8:10]) # Day
+            # From the vCenter objects provided collect only the names/models of
+            # each object from the current type we're comparing against
+            query_key = self.obj_map[nb_obj_type]["key"]
+            vc_obj_values = [obj[query_key] for obj in vc_objects[nb_obj_type]]
+            orphans = [
+                obj for obj in nb_objects if obj[query_key] not in vc_obj_values
+                ]
+            log.info(
+                "Comparsion completed. %s object%s were unmatched.",
+                len(orphans), "s" if len(orphans) != 1 else ""
                 )
-            # Calculated timedelta then converts it to the days integer
-            days_orphaned = (current_date - modified_date).days
-            if days_orphaned >= settings.NB_PRUNE_DELAY_DAYS:
+            log.debug("The following objects did not match: %s", orphans)
+            # Pruned items are checked against the prune timer
+            # All pruned items are first tagged so it is clear why they were
+            # deleted, and then those items which are greater than the max age
+            # will be deleted permanently
+            for orphan in orphans:
                 log.info(
-                    "The %s '%s' object has exceeded the %s day max for "
-                    "orphaned objects. Sending it for deletion.",
-                    nb_obj_type, orphan[query_key],
-                    settings.NB_PRUNE_DELAY_DAYS
+                    "Processing %s '%s' object", nb_obj_type, orphan[query_key]
                     )
-                self.request(
-                    req_type="delete", nb_obj_type=nb_obj_type,
-                    nb_id=orphan["id"],
+                if "Orphaned" not in orphan["tags"]:
+                    log.info(
+                        "No tag found. Adding 'Orphaned' tag to %s '%s' object",
+                        nb_obj_type, orphan[query_key]
+                        )
+                    self.request(
+                        req_type="patch", nb_obj_type=nb_obj_type,
+                        nb_id=orphan["id"],
+                        data={"tags": ["Synced", "vCenter", "Orphaned"]}
+                        )
+                # Check if the orphan has gone past the max prune timer and
+                # needs to be deleted
+                # Dates are in YY, MM, DD format
+                current_date = date.today()
+                modified_date = date(
+                    int(orphan["last_updated"][:4]), # Year
+                    int(orphan["last_updated"][5:7]), # Month
+                    int(orphan["last_updated"][8:10]) # Day
                     )
-            else:
-                log.info(
-                    "The %s '%s' object has been orphaned for %s of %s max "
-                    "days. Proceeding to next object.",
-                    nb_obj_type, orphan[query_key], days_orphaned,
-                    settings.NB_PRUNE_DELAY_DAYS
-                    )
+                # Calculated timedelta then converts it to the days integer
+                days_orphaned = (current_date - modified_date).days
+                if days_orphaned >= settings.NB_PRUNE_DELAY_DAYS:
+                    log.info(
+                        "The %s '%s' object has exceeded the %s day max for "
+                        "orphaned objects. Sending it for deletion.",
+                        nb_obj_type, orphan[query_key],
+                        settings.NB_PRUNE_DELAY_DAYS
+                        )
+                    self.request(
+                        req_type="delete", nb_obj_type=nb_obj_type,
+                        nb_id=orphan["id"],
+                        )
+                else:
+                    log.info(
+                        "The %s '%s' object has been orphaned for %s of %s max "
+                        "days. Proceeding to next object.",
+                        nb_obj_type, orphan[query_key], days_orphaned,
+                        settings.NB_PRUNE_DELAY_DAYS
+                        )
 
     def search_prefix(self, ip_addr):
         """Searches for the parent prefix of any supplied IP address.
