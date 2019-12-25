@@ -689,7 +689,6 @@ class NetBoxHandler:
             )
         # A single matching object is found so we compare its values to the new
         # object
-        send_request = False
         if req["count"] == 1:
             log.debug(
                 "NetBox %s object '%s' already exists. Comparing values.",
@@ -788,13 +787,18 @@ class NetBoxHandler:
                 )
         # Send vCenter objects to the pruner
         if settings.NB_PRUNE_ENABLED:
-            self.prune_objects(vc_objects)
+            self.prune_objects(vc_objects, vc_obj_type)
 
-    def prune_objects(self, vc_objects):
+    def prune_objects(self, vc_objects, vc_obj_type):
         """Collects the current objects from NetBox then compares them to the
         latest vCenter objects.
         If there are objects that do not match they go through a pruning
-        process."""
+        process.
+
+        vc_objects: Dictionary of VC object types and list of their objects
+        vc_obj_type: The parent object type called during the synce. This is
+        used to determine whether special filtering needs to be applied.
+        """
         # Determine qualifying object types based on object map
         nb_obj_types = [t for t in vc_objects if self.obj_map[t]["prune"]]
         # Sort qualify NetBox object types by prune priority. This ensures
@@ -804,13 +808,38 @@ class NetBoxHandler:
             reverse=True
             )
         for nb_obj_type in nb_obj_types:
-            nb_objects = self.request(
-                req_type="get", nb_obj_type=nb_obj_type, query="?tag=vcenter"
-                )["results"]
             log.info(
                 "Comparing existing NetBox %s objects to current vCenter "
                 "objects.", nb_obj_type
                 )
+            nb_objects = self.request(
+                req_type="get", nb_obj_type=nb_obj_type, query="?tag=vcenter"
+                )["results"]
+            # Certain NetBox object types overlap between vCenter object types
+            # When pruning, we must differentiate so as not to compare against
+            # the wrong objects
+            if vc_obj_type == "hosts" and nb_obj_type == "interfaces":
+                nb_objects = [
+                    obj for obj in nb_objects
+                    if obj["device"] is not None
+                    ]
+            elif vc_obj_type == "hosts" and nb_obj_type == "ip_addresses":
+                nb_objects = [
+                    obj for obj in nb_objects
+                    if obj["interface"]["device"] is not None
+                    ]
+            elif vc_obj_type == "virtual_machines" and \
+                    nb_obj_type == "interfaces":
+                nb_objects = [
+                    obj for obj in nb_objects
+                    if obj["virtual_machine"] is not None
+                    ]
+            elif vc_obj_type == "virtual_machines" and \
+                    nb_obj_type == "ip_addresses":
+                nb_objects = [
+                    obj for obj in nb_objects
+                    if obj["interface"]["virtual_machine"] is not None
+                    ]
             # From the vCenter objects provided collect only the names/models of
             # each object from the current type we're comparing against
             query_key = self.obj_map[nb_obj_type]["key"]
@@ -819,8 +848,8 @@ class NetBoxHandler:
                 obj for obj in nb_objects if obj[query_key] not in vc_obj_values
                 ]
             log.info(
-                "Comparsion completed. %s object%s were unmatched.",
-                len(orphans), "s" if len(orphans) != 1 else ""
+                "Comparsion completed. %s %s object%s did not match.",
+                len(orphans), nb_obj_type, "s" if len(orphans) != 1 else ""
                 )
             log.debug("The following objects did not match: %s", orphans)
             # Pruned items are checked against the prune timer
