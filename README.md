@@ -36,6 +36,10 @@ The following minimum software versions have been tested for compatibility.
 * VMware vCenter 6
 * NetBox v2.6.7
 
+The following permissions are required for this script to function.
+* VMware vCenter - User account with "Read-only" role on vCenter root scope. The "Propogate to children" setting must also be checked.
+* NetBox - API token with "write enabled" permissions. Instructions are available in the [NetBox documentation](https://netbox.readthedocs.io/en/stable/api/authentication/).
+
 ## Installation
 
 1. Clone the repository.
@@ -45,8 +49,28 @@ The following minimum software versions have been tested for compatibility.
 5. Execute `run.py`.
 6. [optional] Schedule a cron job to execute the script on a regular basis.
 
-## Example
+## Examples
+
+### Help Menu
 
 ```
-.
+$ run.py -h
+usage: run.py [-h] [-c] [-v]
+
+optional arguments:
+  -h, --help     show this help message and exit
+  -c, --cleanup  Remove all vCenter synced objects which support tagging. This
+                 is helpful if you want to start fresh or stop using this
+                 script.
+  -v, --verbose  Enable verbose output. This overrides the log level in the
+                 settings file. Intended for debugging purposes only.
+```
+
+### Cron Job
+
+The following job runs every 4 hours at minute 15. The full paths to python and the script are provided so that the virtual environment instance and packages are used.
+
+```
+# vCenter to NetBox Sync
+15 */4 * * * /opt/vcenter-netbox-sync/bin/python /opt/vcenter-netbox-sync/run.py >/dev/null 2>&1
 ```

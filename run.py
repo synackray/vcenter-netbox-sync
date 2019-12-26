@@ -220,7 +220,8 @@ class vCenterHandler:
                     )
                 results["cluster_groups"].append(
                     {
-                        "name": obj_name, "slug": obj_name.lower()
+                        "name": obj_name,
+                        "slug": obj_name.replace(" ", "-").lower(),
                     })
         elif vc_obj_type == "clusters":
             # Initalize keys expected to be returned
@@ -298,7 +299,33 @@ class vCenterHandler:
                             "part_number": obj_model,
                             "tags": self.tags
                         })
-                log.debug("Collecting info to create NetBox devices object.")
+                log.debug("Collecting info to create NetBox devices object."
+                )
+                # Attempt to find serial number and asset tag
+                hw_idents = { # Scan throw identifiers to find S/N
+                    identifier.identifierType.key: identifier.identifierValue
+                    for identifier in
+                    obj.summary.hardware.otherIdentifyingInfo
+                    }
+                # Serial Number
+                if "EnclosureSerialNumberTag" in hw_idents.keys():
+                    serial_number = hw_idents["EnclosureSerialNumberTag"]
+                elif "ServiceTag" in hw_idents.keys() \
+                and " " not in hw_idents["ServiceTag"]:
+                    serial_number = hw_idents["ServiceTag"]
+                else:
+                    serial_number = None
+                # Asset Tag
+                if "AssetTag" in hw_idents.keys():
+                    banned_tags = ["Default string", "Unknown", " "]
+                    asset_tag = hw_idents["AssetTag"]
+                    for btag in banned_tags:
+                        if btag in hw_idents["AssetTag"]:
+                            log.debug("Banned asset tag string. Nulling.")
+                            asset_tag = None
+                            break
+                else:
+                    asset_tag = None
                 results["devices"].append(
                     {
                         "name": obj_name,
@@ -306,20 +333,8 @@ class vCenterHandler:
                         "device_role": {"name": "Server"},
                         "platform": {"name": "VMware ESXi"},
                         "site": {"name": "vCenter"},
-                        "serial": [ # Scan throw identifiers to find S/N
-                            identifier.identifierValue for identifier
-                            in obj.summary.hardware.otherIdentifyingInfo
-                            if identifier.identifierType.key == \
-                            "EnclosureSerialNumberTag"
-                            ][0],
-                        "asset_tag": [
-                            (identifier.identifierValue
-                             if identifier.identifierValue != "Default string"
-                             else None
-                            ) for identifier in
-                            obj.summary.hardware.otherIdentifyingInfo
-                            if identifier.identifierType.key == "AssetTag"
-                            ][0],
+                        "serial": serial_number,
+                        "asset_tag": asset_tag,
                         "cluster": {"name": obj.parent.name},
                         "status": ( # 0 = Offline / 1 = Active
                             1 if obj.summary.runtime.connectionState == \
@@ -454,27 +469,28 @@ class vCenterHandler:
                                 "tags": self.tags
                             })
                         # IP Addresses
-                        for ip in nic.ipConfig.ipAddress:
-                            ip_addr = ip.ipAddress
-                            log.debug(
-                                "Collecting info for IP Address '%s'.",
-                                ip_addr
-                                )
-                            results["ip_addresses"].append(
-                                {
-                                    "address": "{}/{}".format(
-                                        ip_addr, ip.prefixLength
-                                        ),
-                                    "vrf": None, # Collected from prefix
-                                    "tenant": None, # Collected from prefix
-                                    "interface": {
-                                        "virtual_machine": {
-                                            "name": obj_name
+                        if nic.ipConfig is not None:
+                            for ip in nic.ipConfig.ipAddress:
+                                ip_addr = ip.ipAddress
+                                log.debug(
+                                    "Collecting info for IP Address '%s'.",
+                                    ip_addr
+                                    )
+                                results["ip_addresses"].append(
+                                    {
+                                        "address": "{}/{}".format(
+                                            ip_addr, ip.prefixLength
+                                            ),
+                                        "vrf": None, # Collected from prefix
+                                        "tenant": None, # Collected from prefix
+                                        "interface": {
+                                            "virtual_machine": {
+                                                "name": obj_name
+                                                },
+                                            "name": nic_name,
                                             },
-                                        "name": nic_name,
-                                        },
-                                    "tags": self.tags
-                                })
+                                        "tags": self.tags
+                                    })
         else:
             raise ValueError(
                 "vCenter object type {} is not valid.".format(vc_obj_type)
@@ -662,6 +678,9 @@ class NetBoxHandler:
                 log.warning(
                     "NetBox failed to create %s object. A duplicate record may "
                     "exist or the data sent is not acceptable.", nb_obj_type
+                    )
+                log.debug(
+                    "NetBox %s status reason: %s", req.status_code, req.json()
                     )
             elif req_type == "put":
                 log.warning(
@@ -996,7 +1015,7 @@ class NetBoxHandler:
                                 ) if settings.NB_PRUNE_ENABLED else ""
 
                 },
-                {"name": self.vc_tag, "slug": self.vc_tag}
+                {"name": self.vc_tag, "slug": self.vc_tag.lower()}
                 ]
             }
         # For each dependency of each type verify object exists
