@@ -5,6 +5,7 @@ import atexit
 from socket import gaierror
 from datetime import date, datetime
 from ipaddress import ip_network
+import argparse
 import requests
 from pyVim.connect import SmartConnectNoSSL, Disconnect
 from pyVmomi import vim
@@ -14,15 +15,31 @@ from logger import log
 
 def main():
     """Main function to run if script is called directly"""
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-c", "--cleanup", action="store_true",
+        help="Remove all vCenter synced objects which support tagging. This "
+             "is helpful if you want to start fresh or stop using this script."
+        )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="Enable verbose output. This overrides the log level in the "
+             "settings file. Intended for debugging purposes only."
+        )
+    args = parser.parse_args()
     start_time = datetime.now()
-    # vc = vCenterHandler()
-    # vc.view_explorer()
     nb = NetBoxHandler()
-    nb.verify_dependencies()
-    nb.sync_objects(vc_obj_type="datacenters")
-    nb.sync_objects(vc_obj_type="clusters")
-    nb.sync_objects(vc_obj_type="hosts")
-    nb.sync_objects(vc_obj_type="virtual_machines")
+    if args.verbose:
+        log.setLevel("DEBUG")
+        log.debug("Log level has been overriden by the --verbose argument.")
+    if args.cleanup:
+        nb.remove_all()
+    else:
+        nb.verify_dependencies()
+        nb.sync_objects(vc_obj_type="datacenters")
+        nb.sync_objects(vc_obj_type="clusters")
+        nb.sync_objects(vc_obj_type="hosts")
+        nb.sync_objects(vc_obj_type="virtual_machines")
     log.info(
         "Completed! Total execution time %s.",
         (datetime.now() - start_time)
@@ -98,7 +115,7 @@ def verify_ip(ip_addr):
     networks provided in the settings file."""
     result = False
     try:
-        log.info(
+        log.debug(
             "Validating IP '%s' is properly formatted and within allowed "
             "networks.",
             ip_addr
@@ -508,35 +525,35 @@ class NetBoxHandler:
                 "api_model": "clusters",
                 "key": "name",
                 "prune": True,
-                "prune_pref": 1
+                "prune_pref": 2
                 },
             "device_types": {
                 "api_app": "dcim",
                 "api_model": "device-types",
                 "key": "model",
                 "prune": True,
-                "prune_pref": 2
+                "prune_pref": 3
                 },
             "devices": {
                 "api_app": "dcim",
                 "api_model": "devices",
                 "key": "name",
                 "prune": True,
-                "prune_pref": 3
+                "prune_pref": 4
                 },
             "interfaces": {
                 "api_app": "dcim",
                 "api_model": "interfaces",
                 "key": "name",
                 "prune": True,
-                "prune_pref": 4
+                "prune_pref": 5
                 },
             "ip_addresses": {
                 "api_app": "ipam",
                 "api_model": "ip-addresses",
                 "key": "address",
                 "prune": True,
-                "prune_pref": 7
+                "prune_pref": 8
                 },
             "manufacturers": {
                 "api_app": "dcim",
@@ -560,7 +577,8 @@ class NetBoxHandler:
                 "api_app": "dcim",
                 "api_model": "sites",
                 "key": "name",
-                "prune": False,
+                "prune": True,
+                "prune_pref": 1
                 },
             "tags": {
                 "api_app": "extras",
@@ -573,14 +591,14 @@ class NetBoxHandler:
                 "api_model": "virtual-machines",
                 "key": "name",
                 "prune": True,
-                "prune_pref": 5
+                "prune_pref": 6
                 },
             "virtual_interfaces": {
                 "api_app": "virtualization",
                 "api_model": "interfaces",
                 "key": "name",
                 "prune": True,
-                "prune_pref": 6
+                "prune_pref": 7
                 },
             }
         self.vc = vCenterHandler()
@@ -623,10 +641,9 @@ class NetBoxHandler:
                     result["results"] += req.json()["results"]
         elif req.status_code in [201, 204]:
             log.info(
-                "NetBox successfully %s %s '%s' object.",
+                "NetBox successfully %s %s object.",
                 "created" if req.status_code == 201 else "deleted",
                 nb_obj_type,
-                data
                 )
         elif req.status_code == 400:
             if req_type == "post":
@@ -720,9 +737,9 @@ class NetBoxHandler:
                 )
         else:
             log.info(
-                "Object '%s' in %s not found.",
+                "Netbox %s '%s' object not found.",
+                nb_obj_type,
                 vc_data[query_key],
-                nb_obj_type
                 )
             self.request(
                 req_type="post", nb_obj_type=nb_obj_type, data=vc_data
@@ -770,7 +787,7 @@ class NetBoxHandler:
                         obj["vrf"] = prefix["vrf"]
                         obj["tenant"] = prefix["tenant"]
                     else:
-                        log.info(
+                        log.debug(
                             "IP %s has failed necessary pre-checks. Skipping "
                             "sync to NetBox.", ip_addr,
                             )
@@ -810,7 +827,7 @@ class NetBoxHandler:
         for nb_obj_type in nb_obj_types:
             log.info(
                 "Comparing existing NetBox %s objects to current vCenter "
-                "objects.", nb_obj_type
+                "objects for pruning eligibility.", nb_obj_type
                 )
             nb_objects = self.request(
                 req_type="get", nb_obj_type=nb_obj_type, query="?tag=vcenter"
@@ -848,7 +865,8 @@ class NetBoxHandler:
                 obj for obj in nb_objects if obj[query_key] not in vc_obj_values
                 ]
             log.info(
-                "Comparsion completed. %s %s object%s did not match.",
+                "Comparison completed. %s %s orphaned NetBox object%s did not "
+                "match.",
                 len(orphans), nb_obj_type, "s" if len(orphans) != 1 else ""
                 )
             log.debug("The following objects did not match: %s", orphans)
@@ -858,11 +876,13 @@ class NetBoxHandler:
             # will be deleted permanently
             for orphan in orphans:
                 log.info(
-                    "Processing %s '%s' object", nb_obj_type, orphan[query_key]
+                    "Processing orphaned NetBox %s '%s' object.",
+                    nb_obj_type, orphan[query_key]
                     )
                 if "Orphaned" not in orphan["tags"]:
                     log.info(
-                        "No tag found. Adding 'Orphaned' tag to %s '%s' object",
+                        "No tag found. Adding 'Orphaned' tag to %s '%s' "
+                        "object.",
                         nb_obj_type, orphan[query_key]
                         )
                     self.request(
@@ -970,6 +990,41 @@ class NetBoxHandler:
             for dep in dependencies[dep_type]:
                 self.obj_exists(nb_obj_type=dep_type, vc_data=dep)
         log.info("Finished verifying prerequisites.")
+
+    def remove_all(self):
+        """Searches NetBox for all synced objects and then removes them.
+        This is intended to be used in the case you wish to start fresh or stop
+        using the script."""
+        log.info("Preparing for removal of NetBox synced vCenter objects.")
+        nb_obj_types = [
+            t for t in self.obj_map if self.obj_map[t]["prune"]
+            ]
+        # Honor preference, highest to lowest
+        nb_obj_types = sorted(
+            nb_obj_types, key=lambda t: self.obj_map[t]["prune_pref"],
+            reverse=True
+            )
+        for nb_obj_type in nb_obj_types:
+            log.info(
+                "Collecting all current NetBox %s objects to prepare for "
+                "deletion.", nb_obj_type
+                )
+            nb_objects = self.request(
+                req_type="get", nb_obj_type=nb_obj_type, query="?tag=vcenter"
+                )["results"]
+            query_key = self.obj_map[nb_obj_type]["key"]
+            log.info(
+                "Deleting %s NetBox %s objects.", len(nb_objects), nb_obj_type
+                )
+            for obj in nb_objects:
+                log.info(
+                    "Deleting NetBox %s '%s' object.", nb_obj_type,
+                    obj[query_key]
+                    )
+                self.request(
+                    req_type="delete", nb_obj_type=nb_obj_type,
+                    nb_id=obj["id"],
+                    )
 
 
 if __name__ == "__main__":
