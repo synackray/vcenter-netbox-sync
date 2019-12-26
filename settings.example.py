@@ -13,7 +13,6 @@ VC_HOSTS = [
     # You can add more vCenter instances by duplicating the line below and
     # updating the values
     {"HOST": "vcenter1.example.com", "PORT": 443},
-    {"HOST": "vcenter2.example.com", "PORT": 443},
     ]
 VC_USER = "" # User account to authenticate to vCenter, supports SSO with @domain.tld suffix
 VC_PASS = "" # Password for the account defined in VC_USER

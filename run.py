@@ -38,7 +38,7 @@ def main():
             log.info(
                 "Completed removal of vCenter instance '%s' objects. Total "
                 "execution time %s.",
-                vc_host, (datetime.now() - start_time)
+                vc_host["HOST"], (datetime.now() - start_time)
                 )
         else:
             nb.verify_dependencies()
@@ -46,10 +46,10 @@ def main():
             nb.sync_objects(vc_obj_type="clusters")
             nb.sync_objects(vc_obj_type="hosts")
             nb.sync_objects(vc_obj_type="virtual_machines")
-        log.info(
-            "Completed sync with vCenter instance '%s'! Total execution time "
-            "%s.", vc_host, (datetime.now() - start_time)
-            )
+            log.info(
+                "Completed sync with vCenter instance '%s'! Total execution "
+                "time %s.", vc_host["HOST"], (datetime.now() - start_time)
+                )
 
 def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
     """Compares the key value pairs of two dictionaries and returns whether
@@ -427,7 +427,14 @@ class vCenterHandler:
                 # Virtual Machines
                 vm_name = obj.name
                 log.debug("Collecting info for virtual machine '%s'", vm_name)
+                # Platform
                 vm_family = obj.guest.guestFamily
+                platform = None
+                if vm_family is not None:
+                    if "linux" in vm_family:
+                        platform = {"name": "Linux"}
+                    elif "windows" in vm_family:
+                        platform = {"name": "Windows"}
                 results["virtual_machines"].append(
                     {
                         "name": vm_name,
@@ -435,11 +442,7 @@ class vCenterHandler:
                                   else 0,
                         "cluster": {"name": obj.runtime.host.parent.name},
                         "role": {"name": "Server"},
-                        "platform": {
-                            "name": "Linux" if "linux" in vm_family
-                                    else "Windows" if "windows" in vm_family
-                                    else None}
-                                    if vm_family else None,
+                        "platform": platform,
                         "memory": obj.config.hardware.memoryMB,
                         "disk": int(sum([
                             comp.capacityInKB for comp in
@@ -959,7 +962,7 @@ class NetBoxHandler:
         """Searches for the parent prefix of any supplied IP address.
         Returns dictionary of VRF and tenant values."""
         result = {"tenant": None, "vrf": None}
-        query = "?prefix={}".format(ip_addr)
+        query = "?contains={}".format(ip_addr)
         try:
             prefix_obj = self.request(
                 req_type="get", nb_obj_type="prefixes", query=query
@@ -1046,15 +1049,31 @@ class NetBoxHandler:
                 "Collecting all current NetBox %s objects to prepare for "
                 "deletion.", nb_obj_type
                 )
+            query = "?tag={}".format(
+                # vCenter site is a global dependency so we change the query
+                "vcenter" if nb_obj_type == "sites" else self.vc_tag
+                )
             nb_objects = self.request(
                 req_type="get", nb_obj_type=nb_obj_type,
-                query="?tag={}".format(self.vc_tag)
+                query=query
                 )["results"]
             query_key = self.obj_map[nb_obj_type]["key"]
             log.info(
                 "Deleting %s NetBox %s objects.", len(nb_objects), nb_obj_type
                 )
             for obj in nb_objects:
+                # NetBox virtual interfaces do not currently support filtering
+                # by tags. Therefore we accidentally collect all virtual
+                # virtual interfaces in our query so we need to make suer we
+                # only delete the relevant ones by checking tags
+                if nb_obj_type == "virtual_interfaces" \
+                and self.vc_tag not in obj["tags"]:
+                    log.debug(
+                        "NetBox %s '%s' object does not contain '%s' tag. "
+                        "Skipping deletion.", nb_obj_type, obj[query_key],
+                        self.vc_tag
+                    )
+                    continue
                 log.info(
                     "Deleting NetBox %s '%s' object.", nb_obj_type,
                     obj[query_key]
