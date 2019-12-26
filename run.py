@@ -27,23 +27,29 @@ def main():
              "settings file. Intended for debugging purposes only."
         )
     args = parser.parse_args()
-    start_time = datetime.now()
-    nb = NetBoxHandler()
     if args.verbose:
         log.setLevel("DEBUG")
         log.debug("Log level has been overriden by the --verbose argument.")
-    if args.cleanup:
-        nb.remove_all()
-    else:
-        nb.verify_dependencies()
-        nb.sync_objects(vc_obj_type="datacenters")
-        nb.sync_objects(vc_obj_type="clusters")
-        nb.sync_objects(vc_obj_type="hosts")
-        nb.sync_objects(vc_obj_type="virtual_machines")
-    log.info(
-        "Completed! Total execution time %s.",
-        (datetime.now() - start_time)
-        )
+    for vc_host in settings.VC_HOSTS:
+        start_time = datetime.now()
+        nb = NetBoxHandler(vc_host["HOST"], vc_host["PORT"])
+        if args.cleanup:
+            nb.remove_all()
+            log.info(
+                "Completed removal of vCenter instance '%s' objects. Total "
+                "execution time %s.",
+                vc_host, (datetime.now() - start_time)
+                )
+        else:
+            nb.verify_dependencies()
+            nb.sync_objects(vc_obj_type="datacenters")
+            nb.sync_objects(vc_obj_type="clusters")
+            nb.sync_objects(vc_obj_type="hosts")
+            nb.sync_objects(vc_obj_type="virtual_machines")
+        log.info(
+            "Completed sync with vCenter instance '%s'! Total execution time "
+            "%s.", vc_host, (datetime.now() - start_time)
+            )
 
 def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
     """Compares the key value pairs of two dictionaries and returns whether
@@ -141,34 +147,37 @@ def verify_ip(ip_addr):
 
 class vCenterHandler:
     """Handles vCenter connection state and export of objects"""
-    def __init__(self):
-        self.vc_content = None # Used to hold vCenter session state
+    def __init__(self, vc_host, vc_port):
+        self.vc_session = None # Used to hold vCenter session state
+        self.vc_host = vc_host
+        self.vc_port = vc_port
+        self.tags = ["Synced", "vCenter", vc_host.split(".")[0]]
 
     def authenticate(self):
         """Authenticate to vCenter"""
         log.info(
             "Attempting authentication to vCenter instance '%s'.",
-            settings.VC_HOST
+            self.vc_host
             )
         try:
             vc_instance = SmartConnectNoSSL(
-                host=settings.VC_HOST,
-                port=settings.VC_PORT,
+                host=self.vc_host,
+                port=self.vc_port,
                 user=settings.VC_USER,
                 pwd=settings.VC_PASS,
                 )
             atexit.register(Disconnect, vc_instance)
-            self.vc_content = vc_instance.RetrieveContent()
+            self.vc_session = vc_instance.RetrieveContent()
             log.info(
                 "Successfully authenticated to vCenter instance '%s'.",
-                settings.VC_HOST
+                self.vc_host
                 )
         except (gaierror, vim.fault.InvalidLogin) as err:
             raise SystemExit(
                 log.critical(
                     "Unable to connect to vCenter instance '%s' on port %s. "
                     "Reason: %s",
-                    settings.VC_HOST, settings.VC_PORT, err
+                    self.vc_host, self.vc_port, err
                 ))
 
     def create_view(self, vc_obj_type):
@@ -183,11 +192,11 @@ class vCenterHandler:
             "virtual_machines": vim.VirtualMachine,
             }
         # Ensure an active vCenter session exists
-        if not self.vc_content:
+        if not self.vc_session:
             log.info("No existing vCenter session found.")
             self.authenticate()
-        return self.vc_content.viewManager.CreateContainerView(
-            self.vc_content.rootFolder, # View starting point
+        return self.vc_session.viewManager.CreateContainerView(
+            self.vc_session.rootFolder, # View starting point
             [vc_obj_views[vc_obj_type]], # Object types to look for
             True # Should we recurively look into view
             )
@@ -228,7 +237,7 @@ class vCenterHandler:
                         "name": obj_name,
                         "type": {"name": "VMware ESXi"},
                         "group": {"name": obj.parent.parent.name},
-                        "tags": ["Synced", "vCenter"]
+                        "tags": self.tags
                     })
         elif vc_obj_type == "hosts":
             # Initialize all the NetBox object types we're going to collect
@@ -287,7 +296,7 @@ class vCenterHandler:
                             "slug": obj_model.\
                                     replace(" ", "-").lower(),
                             "part_number": obj_model,
-                            "tags": ["Synced", "vCenter"]
+                            "tags": self.tags
                         })
                 log.debug("Collecting info to create NetBox devices object.")
                 results["devices"].append(
@@ -317,7 +326,7 @@ class vCenterHandler:
                             "connected"
                             else 0
                             ),
-                        "tags": ["Synced", "vCenter"]
+                        "tags": self.tags
                     })
                 # Iterable object types
                 # Physical Interfaces
@@ -348,7 +357,7 @@ class vCenterHandler:
                                     )
                                 ),
                             "enabled": bool(pnic_up),
-                            "tags": ["Synced", "vCenter"]
+                            "tags": self.tags
                         })
                 # Virtual Interfaces
                 for vnic in obj.config.network.vnic:
@@ -363,7 +372,7 @@ class vCenterHandler:
                             "name": nic_name,
                             "mac_address": vnic.spec.mac.upper(),
                             "mtu": vnic.spec.mtu,
-                            "tags": ["Synced", "vCenter"]
+                            "tags": self.tags
                         })
                     # IP Addresses
                     ip_addr = vnic.spec.ip.ipAddress
@@ -384,7 +393,7 @@ class vCenterHandler:
                                     },
                                 "name": nic_name,
                                 },
-                            "tags": ["Synced", "vCenter"]
+                            "tags": self.tags
                         })
         elif vc_obj_type == "virtual_machines":
             # Initialize all the NetBox object types we're going to collect
@@ -423,7 +432,7 @@ class vCenterHandler:
                             if isinstance(comp, vim.vm.device.VirtualDisk)
                             ]) / 1024 / 1024), # Kilobytes to Gigabytes
                         "vcpus": obj.config.hardware.numCPU,
-                        "tags": ["Synced", "vCenter"]
+                        "tags": self.tags
                     })
                 # If VMware Tools is not detected then we cannot reliably
                 # collect interfaces and IP addresses
@@ -442,7 +451,7 @@ class vCenterHandler:
                                 "name": nic_name,
                                 "mac_address": nic.macAddress.upper(),
                                 "enabled": nic.connected,
-                                "tags": ["Synced", "vCenter"]
+                                "tags": self.tags
                             })
                         # IP Addresses
                         for ip in nic.ipConfig.ipAddress:
@@ -464,7 +473,7 @@ class vCenterHandler:
                                             },
                                         "name": nic_name,
                                         },
-                                    "tags": ["Synced", "vCenter"]
+                                    "tags": self.tags
                                 })
         else:
             raise ValueError(
@@ -498,7 +507,7 @@ class vCenterHandler:
 
 class NetBoxHandler:
     """Handles NetBox connection state and object sync operations"""
-    def __init__(self):
+    def __init__(self, vc_host, vc_port):
         self.header = {"Authorization": "Token {}".format(settings.NB_API_KEY)}
         self.nb_api_url = "http{}://{}{}/api/".format(
             ("s" if not settings.NB_DISABLE_TLS else ""), settings.NB_FQDN,
@@ -601,7 +610,10 @@ class NetBoxHandler:
                 "prune_pref": 7
                 },
             }
-        self.vc = vCenterHandler()
+        # Create an instance of the vCenter host for use in tagging functions
+        # Replace periods with underscores otherwise NetBox cannot search it
+        self.vc_tag = vc_host.split(".")[0]
+        self.vc = vCenterHandler(vc_host=vc_host, vc_port=vc_port)
 
     def request(self, req_type, nb_obj_type, data=None, query=None, nb_id=None):
         """HTTP requests and exception handler for NetBox"""
@@ -737,7 +749,7 @@ class NetBoxHandler:
                 )
         else:
             log.info(
-                "Netbox %s '%s' object not found.",
+                "Netbox %s '%s' object not found. Requesting creation.",
                 nb_obj_type,
                 vc_data[query_key],
                 )
@@ -830,7 +842,8 @@ class NetBoxHandler:
                 "objects for pruning eligibility.", nb_obj_type
                 )
             nb_objects = self.request(
-                req_type="get", nb_obj_type=nb_obj_type, query="?tag=vcenter"
+                req_type="get", nb_obj_type=nb_obj_type,
+                query="?tag={}".format(self.vc_tag)
                 )["results"]
             # Certain NetBox object types overlap between vCenter object types
             # When pruning, we must differentiate so as not to compare against
@@ -885,10 +898,13 @@ class NetBoxHandler:
                         "object.",
                         nb_obj_type, orphan[query_key]
                         )
+                    tags = {
+                        "tags": ["Synced", "vCenter", self.vc_tag, "Orphaned"]
+                        }
                     self.request(
                         req_type="patch", nb_obj_type=nb_obj_type,
                         nb_id=orphan["id"],
-                        data={"tags": ["Synced", "vCenter", "Orphaned"]}
+                        data=tags
                         )
                 # Check if the orphan has gone past the max prune timer and
                 # needs to be deleted
@@ -979,7 +995,9 @@ class NetBoxHandler:
                                 "automatically removed."
                                 ) if settings.NB_PRUNE_ENABLED else ""
 
-                }]
+                },
+                {"name": self.vc_tag, "slug": self.vc_tag}
+                ]
             }
         # For each dependency of each type verify object exists
         log.info("Verifying all prerequisite objects exist in NetBox.")
@@ -1010,7 +1028,8 @@ class NetBoxHandler:
                 "deletion.", nb_obj_type
                 )
             nb_objects = self.request(
-                req_type="get", nb_obj_type=nb_obj_type, query="?tag=vcenter"
+                req_type="get", nb_obj_type=nb_obj_type,
+                query="?tag={}".format(self.vc_tag)
                 )["results"]
             query_key = self.obj_map[nb_obj_type]["key"]
             log.info(
