@@ -299,8 +299,7 @@ class vCenterHandler:
                             "part_number": obj_model,
                             "tags": self.tags
                         })
-                log.debug("Collecting info to create NetBox devices object."
-                )
+                log.debug("Collecting info to create NetBox devices object.")
                 # Attempt to find serial number and asset tag
                 hw_idents = { # Scan throw identifiers to find S/N
                     identifier.identifierType.key: identifier.identifierValue
@@ -1004,19 +1003,19 @@ class NetBoxHandler:
                             "that have been synced from vCenter.",
                 "tags": ["Synced", "vCenter"]
                 }],
-            "tags": [{
-                "name": "Orphaned",
-                "slug": "orphaned",
-                "color": "607d8b",
-                "comments": "This applies to objects that have become "
-                            "orphaned. The source system which has previously "
-                            "provided the object no longer states it "
-                            "exists.{}".format(
-                                " An object with the 'Orphaned' tag will "
-                                "remain in this state until it ages out and is "
-                                "automatically removed."
-                                ) if settings.NB_PRUNE_ENABLED else ""
-
+            "tags": [
+                {
+                    "name": "Orphaned",
+                    "slug": "orphaned",
+                    "color": "607d8b",
+                    "comments": "This applies to objects that have become "
+                                "orphaned. The source system which has "
+                                "previously provided the object no longer "
+                                "states it exists.{}".format(
+                                    " An object with the 'Orphaned' tag will "
+                                    "remain in this state until it ages out "
+                                    "and is automatically removed."
+                                    ) if settings.NB_PRUNE_ENABLED else ""
                 },
                 {"name": self.vc_tag, "slug": self.vc_tag.lower()}
                 ]
