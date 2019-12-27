@@ -31,25 +31,34 @@ def main():
         log.setLevel("DEBUG")
         log.debug("Log level has been overriden by the --verbose argument.")
     for vc_host in settings.VC_HOSTS:
-        start_time = datetime.now()
-        nb = NetBoxHandler(vc_host["HOST"], vc_host["PORT"])
-        if args.cleanup:
-            nb.remove_all()
-            log.info(
-                "Completed removal of vCenter instance '%s' objects. Total "
-                "execution time %s.",
-                vc_host["HOST"], (datetime.now() - start_time)
+        try:
+            start_time = datetime.now()
+            nb = NetBoxHandler(vc_host["HOST"], vc_host["PORT"])
+            if args.cleanup:
+                nb.remove_all()
+                log.info(
+                    "Completed removal of vCenter instance '%s' objects. Total "
+                    "execution time %s.",
+                    vc_host["HOST"], (datetime.now() - start_time)
+                    )
+            else:
+                    nb.verify_dependencies()
+                    nb.sync_objects(vc_obj_type="datacenters")
+                    nb.sync_objects(vc_obj_type="clusters")
+                    nb.sync_objects(vc_obj_type="hosts")
+                    nb.sync_objects(vc_obj_type="virtual_machines")
+                    log.info(
+                        "Completed sync with vCenter instance '%s'! Total "
+                        "execution time %s.", vc_host["HOST"],
+                        (datetime.now() - start_time)
+                        )
+        except (ConnectionError, requests.exceptions.ConnectionError,
+                requests.exceptions.ReadTimeout) as err:
+            log.warning(
+                "Critical connection error occurred. Skipping sync with '%s'.",
+                vc_host["HOST"]
                 )
-        else:
-            nb.verify_dependencies()
-            nb.sync_objects(vc_obj_type="datacenters")
-            nb.sync_objects(vc_obj_type="clusters")
-            nb.sync_objects(vc_obj_type="hosts")
-            nb.sync_objects(vc_obj_type="virtual_machines")
-            log.info(
-                "Completed sync with vCenter instance '%s'! Total execution "
-                "time %s.", vc_host["HOST"], (datetime.now() - start_time)
-                )
+            continue
 
 def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
     """Compares the key value pairs of two dictionaries and returns whether
@@ -172,13 +181,15 @@ class vCenterHandler:
                 "Successfully authenticated to vCenter instance '%s'.",
                 self.vc_host
                 )
-        except (gaierror, vim.fault.InvalidLogin) as err:
-            raise SystemExit(
-                log.critical(
-                    "Unable to connect to vCenter instance '%s' on port %s. "
-                    "Reason: %s",
-                    self.vc_host, self.vc_port, err
-                ))
+        except (gaierror, vim.fault.InvalidLogin, OSError) as err:
+            if isinstance(err, OSError):
+                err = "System unreachable."
+            err_msg = (
+                "Unable to connect to vCenter instance '{}' on port {}. "
+                "Reason: {}".format(self.vc_host, self.vc_port, err)
+                )
+            log.critical(err_msg)
+            raise ConnectionError(err_msg)
 
     def create_view(self, vc_obj_type):
         """Create a view scoped to the vCenter object type desired.
