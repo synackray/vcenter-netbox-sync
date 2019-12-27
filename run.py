@@ -757,6 +757,14 @@ class NetBoxHandler:
                     "NetBox %s object '%s' do not match current values.",
                     nb_obj_type, vc_data[query_key]
                     )
+                # Issue #1: Ensure existing and new tags are merged together
+                # This allows users to add alternative tags or sync from
+                # multiple vCenter instances
+                if vc_data["tags"]:
+                    log.debug("Merging tags between vCenter and NetBox object.")
+                    vc_data["tags"] = list(
+                        set(vc_data["tags"] + nb_data["tags"])
+                        )
                 self.request(
                     req_type="put", nb_obj_type=nb_obj_type, data=vc_data,
                     nb_id=nb_data["id"]
