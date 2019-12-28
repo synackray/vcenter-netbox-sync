@@ -729,6 +729,15 @@ class NetBoxHandler:
                         )
                     )
             log.debug("Unaccepted request data: %s", data)
+        elif req.status_code == 409 and req_type == "delete":
+            log.warning(
+                "Received %s status when attemping to delete NetBox object "
+                "(ID: %s). If you have more than 1 vCenter host configured "
+                "this may be deleted on the final pass. Otherwise check the "
+                "object dependencies.",
+                req.status_code, nb_id
+                )
+            log.debug("NetBox %s status body: %s", req.status_code, req.json())
         else:
             raise SystemExit(
                 log.critical(
@@ -1071,7 +1080,7 @@ class NetBoxHandler:
         """Searches NetBox for all synced objects and then removes them.
         This is intended to be used in the case you wish to start fresh or stop
         using the script."""
-        log.info("Preparing for removal of NetBox synced vCenter objects.")
+        log.info("Preparing for removal of all NetBox synced vCenter objects.")
         nb_obj_types = [
             t for t in self.obj_map if self.obj_map[t]["prune"]
             ]
