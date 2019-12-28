@@ -31,25 +31,34 @@ def main():
         log.setLevel("DEBUG")
         log.debug("Log level has been overriden by the --verbose argument.")
     for vc_host in settings.VC_HOSTS:
-        start_time = datetime.now()
-        nb = NetBoxHandler(vc_host["HOST"], vc_host["PORT"])
-        if args.cleanup:
-            nb.remove_all()
-            log.info(
-                "Completed removal of vCenter instance '%s' objects. Total "
-                "execution time %s.",
-                vc_host["HOST"], (datetime.now() - start_time)
+        try:
+            start_time = datetime.now()
+            nb = NetBoxHandler(vc_host["HOST"], vc_host["PORT"])
+            if args.cleanup:
+                nb.remove_all()
+                log.info(
+                    "Completed removal of vCenter instance '%s' objects. Total "
+                    "execution time %s.",
+                    vc_host["HOST"], (datetime.now() - start_time)
+                    )
+            else:
+                nb.verify_dependencies()
+                nb.sync_objects(vc_obj_type="datacenters")
+                nb.sync_objects(vc_obj_type="clusters")
+                nb.sync_objects(vc_obj_type="hosts")
+                nb.sync_objects(vc_obj_type="virtual_machines")
+                log.info(
+                    "Completed sync with vCenter instance '%s'! Total "
+                    "execution time %s.", vc_host["HOST"],
+                    (datetime.now() - start_time)
+                    )
+        except (ConnectionError, requests.exceptions.ConnectionError,
+                requests.exceptions.ReadTimeout) as err:
+            log.warning(
+                "Critical connection error occurred. Skipping sync with '%s'.",
+                vc_host["HOST"]
                 )
-        else:
-            nb.verify_dependencies()
-            nb.sync_objects(vc_obj_type="datacenters")
-            nb.sync_objects(vc_obj_type="clusters")
-            nb.sync_objects(vc_obj_type="hosts")
-            nb.sync_objects(vc_obj_type="virtual_machines")
-            log.info(
-                "Completed sync with vCenter instance '%s'! Total execution "
-                "time %s.", vc_host["HOST"], (datetime.now() - start_time)
-                )
+            continue
 
 def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
     """Compares the key value pairs of two dictionaries and returns whether
@@ -172,13 +181,15 @@ class vCenterHandler:
                 "Successfully authenticated to vCenter instance '%s'.",
                 self.vc_host
                 )
-        except (gaierror, vim.fault.InvalidLogin) as err:
-            raise SystemExit(
-                log.critical(
-                    "Unable to connect to vCenter instance '%s' on port %s. "
-                    "Reason: %s",
-                    self.vc_host, self.vc_port, err
-                ))
+        except (gaierror, vim.fault.InvalidLogin, OSError) as err:
+            if isinstance(err, OSError):
+                err = "System unreachable."
+            err_msg = (
+                "Unable to connect to vCenter instance '{}' on port {}. "
+                "Reason: {}".format(self.vc_host, self.vc_port, err)
+                )
+            log.critical(err_msg)
+            raise ConnectionError(err_msg)
 
     def create_view(self, vc_obj_type):
         """Create a view scoped to the vCenter object type desired.
@@ -228,18 +239,25 @@ class vCenterHandler:
             results.setdefault("clusters", [])
             container_view = self.create_view(vc_obj_type)
             for obj in container_view.view:
-                obj_name = obj.name
-                log.info(
-                    "Collecting info about vCenter %s '%s' object.",
-                    vc_obj_type, obj_name
-                    )
-                results["clusters"].append(
-                    {
-                        "name": obj_name,
-                        "type": {"name": "VMware ESXi"},
-                        "group": {"name": obj.parent.parent.name},
-                        "tags": self.tags
-                    })
+                try:
+                    obj_name = obj.name
+                    log.info(
+                        "Collecting info about vCenter %s '%s' object.",
+                        vc_obj_type, obj_name
+                        )
+                    results["clusters"].append(
+                        {
+                            "name": obj_name,
+                            "type": {"name": "VMware ESXi"},
+                            "group": {"name": obj.parent.parent.name},
+                            "tags": self.tags
+                        })
+                except AttributeError:
+                    log.warning(
+                        "Unable to collect necessary data for vCenter %s '%s'"
+                        "object. Skipping.", vc_obj_type, obj
+                        )
+                    continue
         elif vc_obj_type == "hosts":
             # Initialize all the NetBox object types we're going to collect
             nb_objects = [
@@ -250,165 +268,180 @@ class vCenterHandler:
                 results.setdefault(nb_obj, [])
             container_view = self.create_view(vc_obj_type)
             for obj in container_view.view:
-                obj_name = obj.name
-                log.info(
-                    "Collecting info about vCenter %s '%s' object.",
-                    vc_obj_type, obj_name
-                    )
-                obj_manuf_name = obj.summary.hardware.vendor
-                # NetBox Manufacturers and Device Types are susceptible to
-                # duplication as they are parents to multiple objects
-                # To avoid unnecessary querying we check to make sure they
-                # haven't already been collected
-                duplicate = {"manufacturers": False, "device_types": False}
-                if obj_manuf_name in \
-                [res["name"] for res in results["manufacturers"]]:
-                    duplicate["manufacturers"] = True
-                    log.debug(
-                        "Manufacturers object already exists. Skipping."
+                try:
+                    obj_name = obj.name
+                    log.info(
+                        "Collecting info about vCenter %s '%s' object.",
+                        vc_obj_type, obj_name
                         )
-                if not duplicate["manufacturers"]:
-                    log.debug(
-                        "Collecting info to create NetBox manufacturers object."
-                        )
-                    results["manufacturers"].append(
-                        {
-                            "name": obj_manuf_name,
-                            "slug": obj_manuf_name.\
-                                    replace(" ", "-").lower(),
-                        })
-                obj_model = obj.summary.hardware.model
-                if obj_model in \
-                [res["model"] for res in results["device_types"]]:
-                    duplicate["device_types"] = True
-                    log.debug(
-                        "Device Types object already exists. Skipping."
-                        )
-                if not duplicate["device_types"]:
-                    log.debug(
-                        "Collecting info to create NetBox device_types object."
-                        )
-                    results["device_types"].append(
-                        {
-                            "manufacturer": {
-                                "name": obj_manuf_name
-                                },
-                            "model": obj_model,
-                            "slug": obj_model.\
-                                    replace(" ", "-").lower(),
-                            "part_number": obj_model,
-                            "tags": self.tags
-                        })
-                log.debug("Collecting info to create NetBox devices object.")
-                # Attempt to find serial number and asset tag
-                hw_idents = { # Scan throw identifiers to find S/N
-                    identifier.identifierType.key: identifier.identifierValue
-                    for identifier in
-                    obj.summary.hardware.otherIdentifyingInfo
-                    }
-                # Serial Number
-                if "EnclosureSerialNumberTag" in hw_idents.keys():
-                    serial_number = hw_idents["EnclosureSerialNumberTag"]
-                elif "ServiceTag" in hw_idents.keys() \
-                and " " not in hw_idents["ServiceTag"]:
-                    serial_number = hw_idents["ServiceTag"]
-                else:
-                    serial_number = None
-                # Asset Tag
-                if "AssetTag" in hw_idents.keys():
-                    banned_tags = ["Default string", "Unknown", " "]
-                    asset_tag = hw_idents["AssetTag"]
-                    for btag in banned_tags:
-                        if btag in hw_idents["AssetTag"]:
-                            log.debug("Banned asset tag string. Nulling.")
-                            asset_tag = None
-                            break
-                else:
-                    asset_tag = None
-                results["devices"].append(
-                    {
-                        "name": obj_name,
-                        "device_type": {"model": obj_model},
-                        "device_role": {"name": "Server"},
-                        "platform": {"name": "VMware ESXi"},
-                        "site": {"name": "vCenter"},
-                        "serial": serial_number,
-                        "asset_tag": asset_tag,
-                        "cluster": {"name": obj.parent.name},
-                        "status": ( # 0 = Offline / 1 = Active
-                            1 if obj.summary.runtime.connectionState == \
-                            "connected"
-                            else 0
-                            ),
-                        "tags": self.tags
-                    })
-                # Iterable object types
-                # Physical Interfaces
-                log.debug("Collecting info to create NetBox interfaces object.")
-                for pnic in obj.config.network.pnic:
-                    nic_name = pnic.device
-                    log.debug(
-                        "Collecting info for physical interface '%s'.",
-                        nic_name
-                        )
-                    pnic_up = pnic.spec.linkSpeed
-                    results["interfaces"].append(
-                        {
-                            "device": {"name": obj_name},
-                            # Interface speed is placed in the description as it
-                            # is irrelevant to making connections and an error
-                            # prone mapping process
-                            "type": 32767, # 32767 = Other
-                            "name": nic_name,
-                            # Capitalized to match NetBox format
-                            "mac_address": pnic.mac.upper(),
-                            "description": ( # I'm sorry :'(
-                                "{}Mbps Physical Interface".format(
-                                    pnic.spec.linkSpeed.speedMb
-                                    ) if pnic_up
-                                else "{}Mbps Physical Interface".format(
-                                    pnic.validLinkSpecification[0].speedMb
-                                    )
-                                ),
-                            "enabled": bool(pnic_up),
-                            "tags": self.tags
-                        })
-                # Virtual Interfaces
-                for vnic in obj.config.network.vnic:
-                    nic_name = vnic.device
-                    log.debug(
-                        "Collecting info for virtual interface '%s'.", nic_name
-                        )
-                    results["interfaces"].append(
-                        {
-                            "device": {"name": obj_name},
-                            "type": 0, # 0 = Virtual
-                            "name": nic_name,
-                            "mac_address": vnic.spec.mac.upper(),
-                            "mtu": vnic.spec.mtu,
-                            "tags": self.tags
-                        })
-                    # IP Addresses
-                    ip_addr = vnic.spec.ip.ipAddress
-                    log.debug(
-                        "Collecting info for IP Address '%s'.",
-                        ip_addr
-                        )
-                    results["ip_addresses"].append(
-                        {
-                            "address": "{}/{}".format(
-                                ip_addr, vnic.spec.ip.subnetMask
-                                ),
-                            "vrf": None, # Collected from prefix
-                            "tenant": None, # Collected from prefix
-                            "interface": {
-                                "device": {
-                                    "name": obj_name
+                    obj_manuf_name = obj.summary.hardware.vendor
+                    # NetBox Manufacturers and Device Types are susceptible to
+                    # duplication as they are parents to multiple objects
+                    # To avoid unnecessary querying we check to make sure they
+                    # haven't already been collected
+                    duplicate = {"manufacturers": False, "device_types": False}
+                    if obj_manuf_name in \
+                    [res["name"] for res in results["manufacturers"]]:
+                        duplicate["manufacturers"] = True
+                        log.debug(
+                            "Manufacturers object already exists. Skipping."
+                            )
+                    if not duplicate["manufacturers"]:
+                        log.debug(
+                            "Collecting info to create NetBox manufacturers "
+                            "object."
+                            )
+                        results["manufacturers"].append(
+                            {
+                                "name": obj_manuf_name,
+                                "slug": obj_manuf_name.\
+                                        replace(" ", "-").lower(),
+                            })
+                    obj_model = obj.summary.hardware.model
+                    if obj_model in \
+                    [res["model"] for res in results["device_types"]]:
+                        duplicate["device_types"] = True
+                        log.debug(
+                            "Device Types object already exists. Skipping."
+                            )
+                    if not duplicate["device_types"]:
+                        log.debug(
+                            "Collecting info to create NetBox device_types "
+                            "object."
+                            )
+                        results["device_types"].append(
+                            {
+                                "manufacturer": {
+                                    "name": obj_manuf_name
                                     },
-                                "name": nic_name,
-                                },
+                                "model": obj_model,
+                                "slug": obj_model.\
+                                        replace(" ", "-").lower(),
+                                "part_number": obj_model,
+                                "tags": self.tags
+                            })
+                    log.debug(
+                        "Collecting info to create NetBox devices object."
+                        )
+                    # Attempt to find serial number and asset tag
+                    hw_idents = { # Scan throw identifiers to find S/N
+                        identifier.identifierType.key:
+                        identifier.identifierValue
+                        for identifier in
+                        obj.summary.hardware.otherIdentifyingInfo
+                        }
+                    # Serial Number
+                    if "EnclosureSerialNumberTag" in hw_idents.keys():
+                        serial_number = hw_idents["EnclosureSerialNumberTag"]
+                    elif "ServiceTag" in hw_idents.keys() \
+                    and " " not in hw_idents["ServiceTag"]:
+                        serial_number = hw_idents["ServiceTag"]
+                    else:
+                        serial_number = None
+                    # Asset Tag
+                    if "AssetTag" in hw_idents.keys():
+                        banned_tags = ["Default string", "Unknown", " "]
+                        asset_tag = hw_idents["AssetTag"]
+                        for btag in banned_tags:
+                            if btag in hw_idents["AssetTag"]:
+                                log.debug("Banned asset tag string. Nulling.")
+                                asset_tag = None
+                                break
+                    else:
+                        asset_tag = None
+                    results["devices"].append(
+                        {
+                            "name": obj_name,
+                            "device_type": {"model": obj_model},
+                            "device_role": {"name": "Server"},
+                            "platform": {"name": "VMware ESXi"},
+                            "site": {"name": "vCenter"},
+                            "serial": serial_number,
+                            "asset_tag": asset_tag,
+                            "cluster": {"name": obj.parent.name},
+                            "status": ( # 0 = Offline / 1 = Active
+                                1 if obj.summary.runtime.connectionState == \
+                                "connected"
+                                else 0
+                                ),
                             "tags": self.tags
                         })
+                    # Iterable object types
+                    # Physical Interfaces
+                    log.debug(
+                        "Collecting info to create NetBox interfaces object."
+                        )
+                    for pnic in obj.config.network.pnic:
+                        nic_name = pnic.device
+                        log.debug(
+                            "Collecting info for physical interface '%s'.",
+                            nic_name
+                            )
+                        pnic_up = pnic.spec.linkSpeed
+                        results["interfaces"].append(
+                            {
+                                "device": {"name": obj_name},
+                                # Interface speed is placed in the description
+                                # as it is irrelevant to making connections and
+                                # an error prone mapping process
+                                "type": 32767, # 32767 = Other
+                                "name": nic_name,
+                                # Capitalized to match NetBox format
+                                "mac_address": pnic.mac.upper(),
+                                "description": ( # I'm sorry :'(
+                                    "{}Mbps Physical Interface".format(
+                                        pnic.spec.linkSpeed.speedMb
+                                        ) if pnic_up
+                                    else "{}Mbps Physical Interface".format(
+                                        pnic.validLinkSpecification[0].speedMb
+                                        )
+                                    ),
+                                "enabled": bool(pnic_up),
+                                "tags": self.tags
+                            })
+                    # Virtual Interfaces
+                    for vnic in obj.config.network.vnic:
+                        nic_name = vnic.device
+                        log.debug(
+                            "Collecting info for virtual interface '%s'.",
+                            nic_name
+                            )
+                        results["interfaces"].append(
+                            {
+                                "device": {"name": obj_name},
+                                "type": 0, # 0 = Virtual
+                                "name": nic_name,
+                                "mac_address": vnic.spec.mac.upper(),
+                                "mtu": vnic.spec.mtu,
+                                "tags": self.tags
+                            })
+                        # IP Addresses
+                        ip_addr = vnic.spec.ip.ipAddress
+                        log.debug(
+                            "Collecting info for IP Address '%s'.",
+                            ip_addr
+                            )
+                        results["ip_addresses"].append(
+                            {
+                                "address": "{}/{}".format(
+                                    ip_addr, vnic.spec.ip.subnetMask
+                                    ),
+                                "vrf": None, # Collected from prefix
+                                "tenant": None, # Collected from prefix
+                                "interface": {
+                                    "device": {
+                                        "name": obj_name
+                                        },
+                                    "name": nic_name,
+                                    },
+                                "tags": self.tags
+                            })
+                except AttributeError:
+                    log.warning(
+                        "Unable to collect necessary data for vCenter %s '%s'"
+                        "object. Skipping.", vc_obj_type, obj
+                        )
+                    continue
         elif vc_obj_type == "virtual_machines":
             # Initialize all the NetBox object types we're going to collect
             nb_objects = [
@@ -418,81 +451,93 @@ class vCenterHandler:
                 results.setdefault(nb_obj, [])
             container_view = self.create_view(vc_obj_type)
             for obj in container_view.view:
-                obj_name = obj.name
-                log.info(
-                    "Collecting info about vCenter %s '%s' object.",
-                    vc_obj_type, obj_name
-                    )
-                # Virtual Machines
-                vm_name = obj.name
-                log.debug("Collecting info for virtual machine '%s'", vm_name)
-                # Platform
-                vm_family = obj.guest.guestFamily
-                platform = None
-                if vm_family is not None:
-                    if "linux" in vm_family:
-                        platform = {"name": "Linux"}
-                    elif "windows" in vm_family:
-                        platform = {"name": "Windows"}
-                results["virtual_machines"].append(
-                    {
-                        "name": vm_name,
-                        "status": 1 if obj.runtime.powerState == "poweredOn"
-                                  else 0,
-                        "cluster": {"name": obj.runtime.host.parent.name},
-                        "role": {"name": "Server"},
-                        "platform": platform,
-                        "memory": obj.config.hardware.memoryMB,
-                        "disk": int(sum([
-                            comp.capacityInKB for comp in
-                            obj.config.hardware.device
-                            if isinstance(comp, vim.vm.device.VirtualDisk)
-                            ]) / 1024 / 1024), # Kilobytes to Gigabytes
-                        "vcpus": obj.config.hardware.numCPU,
-                        "tags": self.tags
-                    })
-                # If VMware Tools is not detected then we cannot reliably
-                # collect interfaces and IP addresses
-                if vm_family:
-                    for index, nic in enumerate(obj.guest.net):
-                        # Interfaces
-                        nic_name = "vNIC{}".format(index)
-                        log.debug(
-                            "Collecting info for virtual interface '%s'.",
-                            nic_name
-                            )
-                        results["virtual_interfaces"].append(
-                            {
-                                "virtual_machine": {"name": obj.name},
-                                "type": 0, # 0 = Virtual
-                                "name": nic_name,
-                                "mac_address": nic.macAddress.upper(),
-                                "enabled": nic.connected,
-                                "tags": self.tags
-                            })
-                        # IP Addresses
-                        if nic.ipConfig is not None:
-                            for ip in nic.ipConfig.ipAddress:
-                                ip_addr = ip.ipAddress
-                                log.debug(
-                                    "Collecting info for IP Address '%s'.",
-                                    ip_addr
-                                    )
-                                results["ip_addresses"].append(
-                                    {
-                                        "address": "{}/{}".format(
-                                            ip_addr, ip.prefixLength
-                                            ),
-                                        "vrf": None, # Collected from prefix
-                                        "tenant": None, # Collected from prefix
-                                        "interface": {
-                                            "virtual_machine": {
-                                                "name": obj_name
+                try:
+                    obj_name = obj.name
+                    log.info(
+                        "Collecting info about vCenter %s '%s' object.",
+                        vc_obj_type, obj_name
+                        )
+                    # Virtual Machines
+                    vm_name = obj.name
+                    log.debug(
+                        "Collecting info for virtual machine '%s'", vm_name
+                        )
+                    # Platform
+                    vm_family = obj.guest.guestFamily
+                    platform = None
+                    if vm_family is not None:
+                        if "linux" in vm_family:
+                            platform = {"name": "Linux"}
+                        elif "windows" in vm_family:
+                            platform = {"name": "Windows"}
+                    results["virtual_machines"].append(
+                        {
+                            "name": vm_name,
+                            "status": 1 if obj.runtime.powerState == "poweredOn"
+                                      else 0,
+                            "cluster": {"name": obj.runtime.host.parent.name},
+                            "role": {"name": "Server"},
+                            "platform": platform,
+                            "memory": obj.config.hardware.memoryMB,
+                            "disk": int(sum([
+                                comp.capacityInKB for comp in
+                                obj.config.hardware.device
+                                if isinstance(comp, vim.vm.device.VirtualDisk)
+                                ]) / 1024 / 1024), # Kilobytes to Gigabytes
+                            "vcpus": obj.config.hardware.numCPU,
+                            "tags": self.tags
+                        })
+                    # If VMware Tools is not detected then we cannot reliably
+                    # collect interfaces and IP addresses
+                    if vm_family:
+                        for index, nic in enumerate(obj.guest.net):
+                            # Interfaces
+                            nic_name = "vNIC{}".format(index)
+                            log.debug(
+                                "Collecting info for virtual interface '%s'.",
+                                nic_name
+                                )
+                            results["virtual_interfaces"].append(
+                                {
+                                    "virtual_machine": {"name": obj.name},
+                                    "type": 0, # 0 = Virtual
+                                    "name": nic_name,
+                                    "mac_address": nic.macAddress.upper(),
+                                    "enabled": nic.connected,
+                                    "tags": self.tags
+                                })
+                            # IP Addresses
+                            if nic.ipConfig is not None:
+                                for ip in nic.ipConfig.ipAddress:
+                                    ip_addr = ip.ipAddress
+                                    log.debug(
+                                        "Collecting info for IP Address '%s'.",
+                                        ip_addr
+                                        )
+                                    results["ip_addresses"].append(
+                                        {
+                                            "address": "{}/{}".format(
+                                                ip_addr, ip.prefixLength
+                                                ),
+                                            # VRF and Tenant are initialized
+                                            # to be later collected through a
+                                            # prefix search
+                                            "vrf": None,
+                                            "tenant": None,
+                                            "interface": {
+                                                "virtual_machine": {
+                                                    "name": obj_name
+                                                    },
+                                                "name": nic_name,
                                                 },
-                                            "name": nic_name,
-                                            },
-                                        "tags": self.tags
-                                    })
+                                            "tags": self.tags
+                                        })
+                except AttributeError:
+                    log.warning(
+                        "Unable to collect necessary data for vCenter %s '%s'"
+                        "object. Skipping.", vc_obj_type, obj
+                        )
+                    continue
         else:
             raise ValueError(
                 "vCenter object type {} is not valid.".format(vc_obj_type)
