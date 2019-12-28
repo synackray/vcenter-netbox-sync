@@ -1056,6 +1056,9 @@ class NetBoxHandler:
                             "that have been synced from vCenter.",
                 "tags": ["Synced", "vCenter"]
                 }],
+            "cluster_types": [
+                {"name": "VMware ESXi", "slug": "vmware-esxi"}
+                ],
             "tags": [
                 {
                     "name": "Orphaned",
