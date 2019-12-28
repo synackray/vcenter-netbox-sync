@@ -58,6 +58,7 @@ def main():
                 "Critical connection error occurred. Skipping sync with '%s'.",
                 vc_host["HOST"]
                 )
+            log.debug("Connection error details: %s", err)
             continue
 
 def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
@@ -72,7 +73,6 @@ def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
         if key not in dict2.keys():
             log.debug("%s not a valid key in %s.", dict1_path, dict2_path)
             result = False
-            break
         elif isinstance(dict1[key], dict) and isinstance(dict2[key], dict):
             log.debug(
                 "%s and %s contain dictionary. Evaluating.", dict1_path,
@@ -111,7 +111,6 @@ def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
             log.debug(
                 "%s and %s values do not match.", dict1_path, dict2_path
                 )
-            break
         else:
             log.debug("%s and %s values match.", dict1_path, dict2_path)
     return result
@@ -550,24 +549,6 @@ class vCenterHandler:
             )
         return results
 
-    def view_explorer(self):
-        """Interactive view explorer for exploring models"""
-        log.warning("View Explorer mode activated! Use with caution!")
-        vc_obj_type = input("Object Type to Explore: ")
-        container_view = self.create_view(vc_obj_type)
-        log.debug("Created view for object type '%s'.", vc_obj_type)
-        objects = [obj for obj in container_view.view]
-        log.debug(
-            "Collected %s objects of object type %s.", len(objects), vc_obj_type
-            )
-        log.warning(
-            "Entering interactive mode. Current data stored in 'objects' "
-            "variable."
-            )
-        import pdb
-        pdb.set_trace()
-        container_view.Destroy()
-
 class NetBoxHandler:
     """Handles NetBox connection state and object sync operations"""
     def __init__(self, vc_host, vc_port):
@@ -843,7 +824,7 @@ class NetBoxHandler:
             )
         vc_objects = self.vc.get_objects(vc_obj_type=vc_obj_type)
         # Determine each NetBox object type collected from vCenter
-        nb_obj_types = [obj for obj in vc_objects]
+        nb_obj_types = list(vc_objects.keys())
         for nb_obj_type in nb_obj_types:
             log.info(
                 "Starting sync of %s vCenter %s object%s to NetBox %s "
