@@ -2,7 +2,7 @@
 name: Bug report
 about: Create a report for a reproducible bug
 title: ''
-labels: ''
+labels: bug
 assignees: ''
 
 ---
@@ -17,6 +17,7 @@ assignees: ''
 ### Environment
 * Python version:  <!-- Example: 3.6.8 -->
 * NetBox version: <!-- Example: 2.6.7 -->
+* vCenter version: <!-- Example: 6.7.0 -->
 * vCenter NetBox Sync version:  <!-- Example: 1.0.0-beta -->
 
 <!--
