@@ -216,34 +216,42 @@ class vCenterHandler:
         in the format NetBox expects.
         NetBox object format should be compliant pass to POST method against the
         API."""
+        log.info(
+            "Collecting vCenter %s objects.",
+            vc_obj_type[:-1].replace("_", " ") # Format virtual machines
+            )
+        # Mapping of vCenter object types to NetBox object types
+        obj_type_map = {
+            "datacenters": ["cluster_groups"],
+            "clusters": ["clusters"],
+            "hosts": [
+                "manufacturers", "device_types", "devices", "interfaces",
+                "ip_addresses"
+                ],
+            "virtual_machines": [
+                "virtual_machines", "virtual_interfaces", "ip_addresses"
+                ]
+            }
         results = {}
-        log.info("Collecting vCenter %s objects.", vc_obj_type[:-1])
-        if vc_obj_type == "datacenters":
-            # Initalize keys expected to be returned
-            results.setdefault("cluster_groups", [])
-            container_view = self.create_view(vc_obj_type)
-            for obj in container_view.view:
+        # Initalize keys expected to be returned
+        for nb_obj_type in obj_type_map[vc_obj_type]:
+            results.setdefault(nb_obj_type, [])
+        # Create vCenter view for object collection
+        container_view = self.create_view(vc_obj_type)
+        for obj in container_view.view:
+            try:
                 obj_name = obj.name
                 log.info(
                     "Collecting info about vCenter %s '%s' object.",
                     vc_obj_type, obj_name
                     )
-                results["cluster_groups"].append(
-                    {
-                        "name": obj_name,
-                        "slug": obj_name.replace(" ", "-").lower(),
-                    })
-        elif vc_obj_type == "clusters":
-            # Initalize keys expected to be returned
-            results.setdefault("clusters", [])
-            container_view = self.create_view(vc_obj_type)
-            for obj in container_view.view:
-                try:
-                    obj_name = obj.name
-                    log.info(
-                        "Collecting info about vCenter %s '%s' object.",
-                        vc_obj_type, obj_name
-                        )
+                if vc_obj_type == "datacenters":
+                    results["cluster_groups"].append(
+                        {
+                            "name": obj_name,
+                            "slug": obj_name.replace(" ", "-").lower(),
+                        })
+                elif vc_obj_type == "clusters":
                     results["clusters"].append(
                         {
                             "name": obj_name,
@@ -251,28 +259,7 @@ class vCenterHandler:
                             "group": {"name": obj.parent.parent.name},
                             "tags": self.tags
                         })
-                except AttributeError:
-                    log.warning(
-                        "Unable to collect necessary data for vCenter %s '%s'"
-                        "object. Skipping.", vc_obj_type, obj
-                        )
-                    continue
-        elif vc_obj_type == "hosts":
-            # Initialize all the NetBox object types we're going to collect
-            nb_objects = [
-                "manufacturers", "device_types", "devices", "interfaces",
-                "ip_addresses"
-                ]
-            for nb_obj in nb_objects:
-                results.setdefault(nb_obj, [])
-            container_view = self.create_view(vc_obj_type)
-            for obj in container_view.view:
-                try:
-                    obj_name = obj.name
-                    log.info(
-                        "Collecting info about vCenter %s '%s' object.",
-                        vc_obj_type, obj_name
-                        )
+                elif vc_obj_type == "hosts":
                     obj_manuf_name = obj.summary.hardware.vendor
                     # NetBox Manufacturers and Device Types are susceptible to
                     # duplication as they are parents to multiple objects
@@ -387,7 +374,7 @@ class vCenterHandler:
                                 "name": nic_name,
                                 # Capitalized to match NetBox format
                                 "mac_address": pnic.mac.upper(),
-                                "description": ( # I'm sorry :'(
+                                "description": (
                                     "{}Mbps Physical Interface".format(
                                         pnic.spec.linkSpeed.speedMb
                                         ) if pnic_up
@@ -435,22 +422,7 @@ class vCenterHandler:
                                     },
                                 "tags": self.tags
                             })
-                except AttributeError:
-                    log.warning(
-                        "Unable to collect necessary data for vCenter %s '%s'"
-                        "object. Skipping.", vc_obj_type, obj
-                        )
-                    continue
-        elif vc_obj_type == "virtual_machines":
-            # Initialize all the NetBox object types we're going to collect
-            nb_objects = [
-                "virtual_machines", "virtual_interfaces", "ip_addresses",
-                ]
-            for nb_obj in nb_objects:
-                results.setdefault(nb_obj, [])
-            container_view = self.create_view(vc_obj_type)
-            for obj in container_view.view:
-                try:
+                elif vc_obj_type == "virtual_machines":
                     obj_name = obj.name
                     log.info(
                         "Collecting info about vCenter %s '%s' object.",
@@ -531,21 +503,17 @@ class vCenterHandler:
                                                 },
                                             "tags": self.tags
                                         })
-                except AttributeError:
-                    log.warning(
-                        "Unable to collect necessary data for vCenter %s '%s'"
-                        "object. Skipping.", vc_obj_type, obj
-                        )
-                    continue
-        else:
-            raise ValueError(
-                "vCenter object type {} is not valid.".format(vc_obj_type)
-                )
+            except AttributeError:
+                log.warning(
+                    "Unable to collect necessary data for vCenter %s '%s'"
+                    "object. Skipping.", vc_obj_type, obj
+                    )
+                continue
         container_view.Destroy()
         log.debug(
             "Collected %s vCenter %s object%s.", len(results),
-            vc_obj_type[:-1],
-            "s" if len(results) != 1 else "", # Grammar matters :)
+            vc_obj_type[:-1].replace("_", " "),
+            "s" if len(results) != 1 else "",
             )
         return results
 
