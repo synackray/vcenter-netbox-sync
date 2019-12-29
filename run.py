@@ -780,7 +780,19 @@ class NetBoxHandler:
                 nb_obj_type, vc_data[query_key]
                 )
             nb_data = req["results"][0]
-            if compare_dicts(
+            # Objects that have been previously tagged as orphaned but then
+            # reappear in vCenter need to be stripped of their orphaned status
+            if "tags" in vc_data and "Orphaned" in nb_data["tags"]:
+                log.info(
+                    "NetBox %s object '%s' is currently marked as orphaned "
+                    "but has reappeared in vCenter. Updating NetBox.",
+                    nb_obj_type, vc_data[query_key]
+                    )
+                self.request(
+                    req_type="put", nb_obj_type=nb_obj_type, data=vc_data,
+                    nb_id=nb_data["id"]
+                    )
+            elif compare_dicts(
                     vc_data, nb_data, dict1_name="vc_data",
                     dict2_name="nb_data"):
                 log.info(
@@ -795,7 +807,7 @@ class NetBoxHandler:
                 # Issue #1: Ensure existing and new tags are merged together
                 # This allows users to add alternative tags or sync from
                 # multiple vCenter instances
-                if vc_data["tags"]:
+                if "tags" in vc_data:
                     log.debug("Merging tags between vCenter and NetBox object.")
                     vc_data["tags"] = list(
                         set(vc_data["tags"] + nb_data["tags"])
