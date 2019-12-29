@@ -62,8 +62,13 @@ def main():
             continue
 
 def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
-    """Compares the key value pairs of two dictionaries and returns whether
-    the values match or not."""
+    """
+    Compares the key value pairs of two dictionaries and match boolean.
+
+    dict1 keys and values are compared against dict2. dict2 may have keys and
+    values that dict1 does not care evaluate.
+    dict1_name and dict2_name allow you to overwrite dictionary name for logs.
+    """
     # Setup paths to track key exploration. The path parameter is used to allow
     # recursive comparisions and track what's being compared.
     result = True
@@ -116,8 +121,11 @@ def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
     return result
 
 def format_ip(ip_addr):
-    """Formats IPv4 addresses to IP with CIDR standard notation. This is used
-    to ensure equal comparsion against exists NetBox IP Address objects."""
+    """
+    Formats IPv4 addresses to IP with CIDR standard notation.
+
+    ip_address expects IP and subnet mask, example: 192.168.0.0/255.255.255.0
+    """
     ip = ip_addr.split("/")[0]
     cidr = ip_network(ip_addr, strict=False).prefixlen
     result = "{}/{}".format(ip, cidr)
@@ -125,8 +133,12 @@ def format_ip(ip_addr):
     return result
 
 def verify_ip(ip_addr):
-    """Verify IP address received is valid and within the allowed networks
-    networks provided in the settings file."""
+    """
+    Verify input is expected format and checks against allowed networks.
+
+    Allowed networks can be defined in the settings IPV4_ALLOWED and
+    IPV6_ALLOWED variables.
+    """
     result = False
     try:
         log.debug(
@@ -154,7 +166,7 @@ def verify_ip(ip_addr):
     return result
 
 class vCenterHandler:
-    """Handles vCenter connection state and export of objects"""
+    """Handles vCenter connection state and object data collection"""
     def __init__(self, vc_host, vc_port):
         self.vc_session = None # Used to hold vCenter session state
         self.vc_host = vc_host
@@ -191,8 +203,10 @@ class vCenterHandler:
             raise ConnectionError(err_msg)
 
     def create_view(self, vc_obj_type):
-        """Create a view scoped to the vCenter object type desired.
-        This should be called by gets for vCenter object types.
+        """
+        Create a view scoped to the vCenter object type desired.
+
+        This should be called before collecting data about vCenter object types.
         """
         # Mapping of object type keywords to view types
         vc_obj_views = {
@@ -212,10 +226,13 @@ class vCenterHandler:
             )
 
     def get_objects(self, vc_obj_type):
-        """Collects all objects of a type from vCenter and then builds objects
-        in the format NetBox expects.
-        NetBox object format should be compliant pass to POST method against the
-        API."""
+        """
+        Collects vCenter objects of type and returns NetBox formated objects.
+
+        Returns dictionary of NetBox object types and corresponding list of
+        Netbox objects. Object format must be compliant to NetBox API POST
+        method (include all required fields).
+        """
         log.info(
             "Collecting vCenter %s objects.",
             vc_obj_type[:-1].replace("_", " ") # Format virtual machines
@@ -518,7 +535,7 @@ class vCenterHandler:
         return results
 
 class NetBoxHandler:
-    """Handles NetBox connection state and object sync operations"""
+    """Handles NetBox connection state and interaction with API"""
     def __init__(self, vc_host, vc_port):
         self.header = {"Authorization": "Token {}".format(settings.NB_API_KEY)}
         self.nb_api_url = "http{}://{}{}/api/".format(
@@ -526,8 +543,7 @@ class NetBoxHandler:
             (":{}".format(settings.NB_PORT) if settings.NB_PORT != 443 else "")
             )
         self.nb_session = None
-        # Object type relationships when working in the API and browsing the
-        # object data structures
+        # NetBox object type relationships when working in the API
         self.obj_map = {
             "cluster_groups": {
                 "api_app": "virtualization",
@@ -628,7 +644,15 @@ class NetBoxHandler:
         self.vc = vCenterHandler(vc_host=vc_host, vc_port=vc_port)
 
     def request(self, req_type, nb_obj_type, data=None, query=None, nb_id=None):
-        """HTTP requests and exception handler for NetBox"""
+        """
+        HTTP requests and exception handler for NetBox
+
+        req_type: HTTP Method
+        nb_obj_type: NetBox object type, must match keys in self.obj_map
+        data: Dictionary to be passed as request body.
+        query: String used to filter results when using GET method
+        nb_id: Integer used when working with a single NetBox object
+        """
         # If an existing session is not already found then create it
         # The goal here is session re-use without TCP handshake on every request
         if not self.nb_session:
@@ -718,8 +742,16 @@ class NetBoxHandler:
         return result
 
     def obj_exists(self, nb_obj_type, vc_data):
-        """Checks if a NetBox object exists and has matching key value pairs.
-        If not, the record wil be created or updated."""
+        """
+        Checks whether a NetBox object exists and matches the vCenter object.
+
+        If object does not exist or does not match the vCenter object it will
+        be created or updated.
+
+        nb_obj_type: String NetBox object type to query for and compare against
+        vc_data: Dictionary of vCenter object key value pairs pre-formatted for
+        NetBox
+        """
         # NetBox Device Types objects do not have names to query; we catch
         # and use the model instead
         query_key = self.obj_map[nb_obj_type]["key"]
@@ -790,7 +822,9 @@ class NetBoxHandler:
                 )
 
     def sync_objects(self, vc_obj_type):
-        """Collects objects from vCenter and syncs them to NetBox.
+        """
+        Collects objects from vCenter and syncs them to NetBox.
+
         Some object types do not support tags so they will be a one-way sync
         meaning orphaned objects will not be removed from NetBox.
         """
@@ -851,10 +885,11 @@ class NetBoxHandler:
             self.prune_objects(vc_objects, vc_obj_type)
 
     def prune_objects(self, vc_objects, vc_obj_type):
-        """Collects the current objects from NetBox then compares them to the
-        latest vCenter objects.
-        If there are objects that do not match they go through a pruning
-        process.
+        """
+        Collects NetBox objects and checks if they still exist in vCenter.
+
+        If NetBox objects are not found in the supplied vc_objects data then
+        they will go through a pruning process.
 
         vc_objects: Dictionary of VC object types and list of their objects
         vc_obj_type: The parent object type called during the synce. This is
@@ -969,8 +1004,11 @@ class NetBoxHandler:
                         )
 
     def search_prefix(self, ip_addr):
-        """Searches for the parent prefix of any supplied IP address.
-        Returns dictionary of VRF and tenant values."""
+        """
+        Queries Netbox for the parent prefix of any supplied IP address.
+
+        Returns dictionary of VRF and tenant values.
+        """
         result = {"tenant": None, "vrf": None}
         query = "?contains={}".format(ip_addr)
         try:
@@ -997,7 +1035,9 @@ class NetBoxHandler:
         return result
 
     def verify_dependencies(self):
-        """Validates that all prerequisite objects exist in NetBox"""
+        """
+        Validates that all prerequisite NetBox objects exist and creates them.
+        """
         dependencies = {
             "manufacturers": [
                 {"name": "VMware", "slug": "vmware"},
@@ -1045,9 +1085,12 @@ class NetBoxHandler:
         log.info("Finished verifying prerequisites.")
 
     def remove_all(self):
-        """Searches NetBox for all synced objects and then removes them.
+        """
+        Searches NetBox for all synced objects and then removes them.
+
         This is intended to be used in the case you wish to start fresh or stop
-        using the script."""
+        using the script.
+        """
         log.info("Preparing for removal of all NetBox synced vCenter objects.")
         nb_obj_types = [
             t for t in self.obj_map if self.obj_map[t]["prune"]
