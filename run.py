@@ -132,6 +132,44 @@ def format_ip(ip_addr):
     log.debug("Converted '%s' to CIDR notation '%s'.", ip_addr, result)
     return result
 
+def format_slug(text):
+    """
+    Format string to comply to NetBox slug acceptable pattern and max length.
+
+    NetBox slug pattern: ^[-a-zA-Z0-9_]+$
+    NetBox slug max length: 50 characters
+    """
+    allowed_chars = (
+        "abcdefghijklmnopqrstuvxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" # Alphabet
+        "01234567890" # Numbers
+        "_-" # Symbols
+        )
+    # Replace spaces with dashes
+    text = text.replace(" ", "-")
+    # Strip unacceptable characters
+    text = "".join([c for c in text if c in allowed_chars])
+    # Enforce max length
+    return truncate(text, max_len=50).lower()
+
+def format_tag(tag):
+    """
+    Format string to comply to NetBox tag format and max length.
+
+    NetBox tag max length: 100 characters
+    """
+    # If the tag presented is an IP address then no modifications are required
+    try:
+        ip_network(tag)
+    except ValueError:
+        # If an IP was not provided then assume fqdn
+        tag = tag.split(".")[0]
+        tag = truncate(tag, max_len=100)
+    return tag
+
+def truncate(text="", max_len=50):
+    """Ensure a string complies to the maximum length specified."""
+    return text if len(text) < max_len else text[:max_len]
+
 def verify_ip(ip_addr):
     """
     Verify input is expected format and checks against allowed networks.
@@ -265,19 +303,22 @@ class vCenterHandler:
                 if vc_obj_type == "datacenters":
                     results["cluster_groups"].append(
                         {
-                            "name": obj_name,
-                            "slug": obj_name.replace(" ", "-").lower(),
+                            "name": truncate(obj_name, max_len=50),
+                            "slug": format_slug(obj_name),
                         })
                 elif vc_obj_type == "clusters":
+                    cluster_group = truncate(obj.parent.parent.name, max_len=50)
                     results["clusters"].append(
                         {
-                            "name": obj_name,
+                            "name": truncate(obj_name, max_len=100),
                             "type": {"name": "VMware ESXi"},
-                            "group": {"name": obj.parent.parent.name},
+                            "group": {"name": cluster_group},
                             "tags": self.tags
                         })
                 elif vc_obj_type == "hosts":
-                    obj_manuf_name = obj.summary.hardware.vendor
+                    obj_manuf_name = truncate(
+                        obj.summary.hardware.vendor, max_len=50
+                        )
                     # NetBox Manufacturers and Device Types are susceptible to
                     # duplication as they are parents to multiple objects
                     # To avoid unnecessary querying we check to make sure they
@@ -297,10 +338,9 @@ class vCenterHandler:
                         results["manufacturers"].append(
                             {
                                 "name": obj_manuf_name,
-                                "slug": obj_manuf_name.\
-                                        replace(" ", "-").lower(),
+                                "slug": format_slug(obj_manuf_name)
                             })
-                    obj_model = obj.summary.hardware.model
+                    obj_model = truncate(obj.summary.hardware.model, max_len=50)
                     if obj_model in \
                     [res["model"] for res in results["device_types"]]:
                         duplicate["device_types"] = True
@@ -318,8 +358,7 @@ class vCenterHandler:
                                     "name": obj_manuf_name
                                     },
                                 "model": obj_model,
-                                "slug": obj_model.\
-                                        replace(" ", "-").lower(),
+                                "slug": format_slug(obj_model),
                                 "part_number": obj_model,
                                 "tags": self.tags
                             })
@@ -336,15 +375,17 @@ class vCenterHandler:
                     # Serial Number
                     if "EnclosureSerialNumberTag" in hw_idents.keys():
                         serial_number = hw_idents["EnclosureSerialNumberTag"]
+                        serial_number = truncate(serial_number, max_len=50)
                     elif "ServiceTag" in hw_idents.keys() \
                     and " " not in hw_idents["ServiceTag"]:
                         serial_number = hw_idents["ServiceTag"]
+                        serial_number = truncate(serial_number, max_len=50)
                     else:
                         serial_number = None
                     # Asset Tag
                     if "AssetTag" in hw_idents.keys():
                         banned_tags = ["Default string", "Unknown", " "]
-                        asset_tag = hw_idents["AssetTag"]
+                        asset_tag = truncate(hw_idents["AssetTag"], max_len=50)
                         for btag in banned_tags:
                             if btag in hw_idents["AssetTag"]:
                                 log.debug("Banned asset tag string. Nulling.")
@@ -352,16 +393,17 @@ class vCenterHandler:
                                 break
                     else:
                         asset_tag = None
+                    cluster = truncate(obj.parent.name, max_len=100)
                     results["devices"].append(
                         {
-                            "name": obj_name,
+                            "name": truncate(obj_name, max_len=64),
                             "device_type": {"model": obj_model},
                             "device_role": {"name": "Server"},
                             "platform": {"name": "VMware ESXi"},
                             "site": {"name": "vCenter"},
                             "serial": serial_number,
                             "asset_tag": asset_tag,
-                            "cluster": {"name": obj.parent.name},
+                            "cluster": {"name": cluster},
                             "status": ( # 0 = Offline / 1 = Active
                                 1 if obj.summary.runtime.connectionState == \
                                 "connected"
@@ -375,7 +417,7 @@ class vCenterHandler:
                         "Collecting info to create NetBox interfaces object."
                         )
                     for pnic in obj.config.network.pnic:
-                        nic_name = pnic.device
+                        nic_name = truncate(pnic.device, max_len=64)
                         log.debug(
                             "Collecting info for physical interface '%s'.",
                             nic_name
@@ -404,7 +446,7 @@ class vCenterHandler:
                             })
                     # Virtual Interfaces
                     for vnic in obj.config.network.vnic:
-                        nic_name = vnic.device
+                        nic_name = truncate(vnic.device, max_len=64)
                         log.debug(
                             "Collecting info for virtual interface '%s'.",
                             nic_name
@@ -440,19 +482,20 @@ class vCenterHandler:
                                 "tags": self.tags
                             })
                 elif vc_obj_type == "virtual_machines":
-                    obj_name = obj.name
                     log.info(
                         "Collecting info about vCenter %s '%s' object.",
                         vc_obj_type, obj_name
                         )
                     # Virtual Machines
-                    vm_name = obj.name
                     log.debug(
-                        "Collecting info for virtual machine '%s'", vm_name
+                        "Collecting info for virtual machine '%s'", obj_name
                         )
                     # Platform
                     vm_family = obj.guest.guestFamily
                     platform = None
+                    cluster = truncate(
+                        obj.runtime.host.parent.name, max_len=100
+                        )
                     if vm_family is not None:
                         if "linux" in vm_family:
                             platform = {"name": "Linux"}
@@ -460,10 +503,10 @@ class vCenterHandler:
                             platform = {"name": "Windows"}
                     results["virtual_machines"].append(
                         {
-                            "name": vm_name,
+                            "name": truncate(obj_name, max_len=64),
                             "status": 1 if obj.runtime.powerState == "poweredOn"
                                       else 0,
-                            "cluster": {"name": obj.runtime.host.parent.name},
+                            "cluster": {"name": cluster},
                             "role": {"name": "Server"},
                             "platform": platform,
                             "memory": obj.config.hardware.memoryMB,
@@ -487,7 +530,7 @@ class vCenterHandler:
                                 )
                             results["virtual_interfaces"].append(
                                 {
-                                    "virtual_machine": {"name": obj.name},
+                                    "virtual_machine": {"name": obj_name},
                                     "type": 0, # 0 = Virtual
                                     "name": nic_name,
                                     "mac_address": nic.macAddress.upper(),
@@ -639,8 +682,8 @@ class NetBoxHandler:
                 },
             }
         # Create an instance of the vCenter host for use in tagging functions
-        # Replace periods with underscores otherwise NetBox cannot search it
-        self.vc_tag = vc_host.split(".")[0]
+        # Strip to hostname if a fqdn was provided
+        self.vc_tag = format_tag(vc_host)
         self.vc = vCenterHandler(vc_host=vc_host, vc_port=vc_port)
 
     def request(self, req_type, nb_obj_type, data=None, query=None, nb_id=None):
@@ -667,7 +710,7 @@ class NetBoxHandler:
             query if query else "",
             "{}/".format(nb_id) if nb_id else ""
             )
-        log.debug("Sending %s to %s", req_type.upper(), url)
+        log.debug("Sending %s to '%s'", req_type.upper(), url)
         req = getattr(self.nb_session, req_type)(url, json=data, timeout=10)
         # Parse status
         if req.status_code == 200:
