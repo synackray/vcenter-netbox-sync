@@ -2,7 +2,7 @@
 name: Bug report
 about: Create a report for a reproducible bug
 title: ''
-labels: bug
+labels: 'Status: Pending, Type: Bug'
 assignees: ''
 
 ---
