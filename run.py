@@ -144,8 +144,10 @@ def format_slug(text):
         "01234567890" # Numbers
         "_-" # Symbols
         )
-    # Replace spaces with dashes
-    text = text.replace(" ", "-")
+    # Replace seperators with dash
+    seperators = [" ", ",", "."]
+    for sep in seperators:
+        text = text.replace(sep, "-")
     # Strip unacceptable characters
     text = "".join([c for c in text if c in allowed_chars])
     # Enforce max length
@@ -209,7 +211,7 @@ class vCenterHandler:
         self.vc_session = None # Used to hold vCenter session state
         self.vc_host = vc_host
         self.vc_port = vc_port
-        self.tags = ["Synced", "vCenter", vc_host.split(".")[0]]
+        self.tags = ["Synced", "vCenter", format_tag(self.vc_host)]
 
     def authenticate(self):
         """Authenticate to vCenter"""
@@ -607,6 +609,12 @@ class NetBoxHandler:
                 "prune": True,
                 "prune_pref": 2
                 },
+            "device_roles": {
+                "api_app": "dcim",
+                "api_model": "device-roles",
+                "key": "name",
+                "prune": False,
+                },
             "device_types": {
                 "api_app": "dcim",
                 "api_model": "device-types",
@@ -965,7 +973,9 @@ class NetBoxHandler:
                 )
             nb_objects = self.request(
                 req_type="get", nb_obj_type=nb_obj_type,
-                query="?tag={}".format(self.vc_tag)
+                # For tags we cannot search strings containing a period as of
+                # NetBox 2.6.7 so we search on the slug to be safe
+                query="?tag={}".format(format_slug(self.vc_tag))
                 )["results"]
             # Certain NetBox object types overlap between vCenter object types
             # When pruning, we must differentiate so as not to compare against
@@ -1112,6 +1122,13 @@ class NetBoxHandler:
             "cluster_types": [
                 {"name": "VMware ESXi", "slug": "vmware-esxi"}
                 ],
+            "device_roles": [
+                {
+                    "name": "Server",
+                    "slug": "server",
+                    "color": "9e9e9e",
+                    "vm_role": True
+                }],
             "tags": [
                 {
                     "name": "Orphaned",
@@ -1126,8 +1143,13 @@ class NetBoxHandler:
                                     "and is automatically removed."
                                     ) if settings.NB_PRUNE_ENABLED else ""
                 },
-                {"name": self.vc_tag, "slug": self.vc_tag.lower()}
-                ]
+                {
+                    "name": self.vc_tag,
+                    "slug": format_slug(self.vc_tag),
+                    "comments": "Objects synced from vCenter host "
+                                "{}. Be careful not to modify the name or "
+                                "slug.".format(self.vc_tag)
+                }]
             }
         # For each dependency of each type verify object exists
         log.info("Verifying all prerequisite objects exist in NetBox.")
