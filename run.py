@@ -719,7 +719,9 @@ class NetBoxHandler:
             "{}/".format(nb_id) if nb_id else ""
             )
         log.debug("Sending %s to '%s'", req_type.upper(), url)
-        req = getattr(self.nb_session, req_type)(url, json=data, timeout=10)
+        req = getattr(self.nb_session, req_type)(
+            url, json=data, timeout=10, verify=(not settings.NB_INSECURE_TLS)
+            )
         # Parse status
         if req.status_code == 200:
             log.debug(

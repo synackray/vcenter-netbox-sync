@@ -21,6 +21,7 @@ VC_PASS = "" # Password for the account defined in VC_USER
 NB_API_KEY = "" # NetBox API Key
 NB_DISABLE_TLS = False # Disables SSL/TLS and uses HTTP for requests. Not ever recommended.
 NB_FQDN = "netbox.example.com" # The fully qualified domain name to reach NetBox
+NB_INSECURE_TLS = False # Leverage SSL/TLS but ignore certificate errors (ex. expired, untrusted)
 NB_PORT = 443 # [optional] NetBox port to connect to if changed from the default
 NB_PRUNE_ENABLED = True # Automatically orphan and delete objects if they are no longer in their source system
 NB_PRUNE_DELAY_DAYS = 0 # How many days should we wait before pruning an orphaned object

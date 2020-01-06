@@ -1,5 +1,7 @@
 # vCenter NetBox Sync
 
+![Build](https://github.com/synackray/vcenter-netbox-sync/workflows/Build/badge.svg?branch=master)
+
 Exports vCenter objects using the [VMware pyVmomi](https://github.com/vmware/pyvmomi) SDK, transforms them into NetBox objects, and syncs them.
 
 ## Principles
