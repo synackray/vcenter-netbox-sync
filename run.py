@@ -998,6 +998,10 @@ class NetBoxHandler:
                     obj for obj in nb_objects
                     if self.vc_tag in obj["tags"]
                     ]
+                log.debug(
+                    "Found %s virtual interfaces with tag '%s'.",
+                    len(nb_objects), self.vc_tag
+                    )
             elif vc_obj_type == "virtual_machines" and \
                     nb_obj_type == "ip_addresses":
                 nb_objects = [
