@@ -389,7 +389,7 @@ class vCenterHandler:
                         banned_tags = ["Default string", "Unknown", " "]
                         asset_tag = truncate(hw_idents["AssetTag"], max_len=50)
                         for btag in banned_tags:
-                            if btag in hw_idents["AssetTag"]:
+                            if btag.lower() in hw_idents["AssetTag"].lower():
                                 log.debug("Banned asset tag string. Nulling.")
                                 asset_tag = None
                                 break
