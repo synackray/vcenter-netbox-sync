@@ -389,7 +389,7 @@ class vCenterHandler:
                         banned_tags = ["Default string", "Unknown", " "]
                         asset_tag = truncate(hw_idents["AssetTag"], max_len=50)
                         for btag in banned_tags:
-                            if btag in hw_idents["AssetTag"]:
+                            if btag.lower() in hw_idents["AssetTag"].lower():
                                 log.debug("Banned asset tag string. Nulling.")
                                 asset_tag = None
                                 break
@@ -975,13 +975,11 @@ class NetBoxHandler:
                 )
             nb_objects = self.request(
                 req_type="get", nb_obj_type=nb_obj_type,
-                # For tags we cannot search strings containing a period as of
-                # NetBox 2.6.7 so we search on the slug to be safe
+                # Tags need to always be searched by slug
                 query="?tag={}".format(format_slug(self.vc_tag))
                 )["results"]
-            # Certain NetBox object types overlap between vCenter object types
-            # When pruning, we must differentiate so as not to compare against
-            # the wrong objects
+            # Certain vCenter object types map to multiple NetBox types. We
+            # define the relationships to compare against for these situations.
             if vc_obj_type == "hosts" and nb_obj_type == "interfaces":
                 nb_objects = [
                     obj for obj in nb_objects
@@ -992,12 +990,18 @@ class NetBoxHandler:
                     obj for obj in nb_objects
                     if obj["interface"]["device"] is not None
                     ]
+            # Issue 33: As of NetBox v2.6.11 it is not possible to filter
+            # virtual interfaces by tag. Therefore we filter post collection.
             elif vc_obj_type == "virtual_machines" and \
-                    nb_obj_type == "interfaces":
+                    nb_obj_type == "virtual_interfaces":
                 nb_objects = [
                     obj for obj in nb_objects
-                    if obj["virtual_machine"] is not None
+                    if self.vc_tag in obj["tags"]
                     ]
+                log.debug(
+                    "Found %s virtual interfaces with tag '%s'.",
+                    len(nb_objects), self.vc_tag
+                    )
             elif vc_obj_type == "virtual_machines" and \
                     nb_obj_type == "ip_addresses":
                 nb_objects = [
