@@ -83,7 +83,7 @@ def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
                 "%s and %s contain dictionary. Evaluating.", dict1_path,
                 dict2_path
                 )
-            compare_dicts(
+            result = compare_dicts(
                 dict1[key], dict2[key], dict1_name, dict2_name,
                 path="[{}]".format(key)
                 )
@@ -112,12 +112,12 @@ def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
                 dict1_path, dict1[key], dict2_path, dict2[key]
                 )
             result = False
-        if not result:
-            log.debug(
-                "%s and %s values do not match.", dict1_path, dict2_path
-                )
-        else:
+        if result:
             log.debug("%s and %s values match.", dict1_path, dict2_path)
+        else:
+            log.debug("%s and %s values do not match.", dict1_path, dict2_path)
+            return result
+    log.debug("Final dictionary compare result: %s", result)
     return result
 
 def format_ip(ip_addr):
@@ -1220,22 +1220,22 @@ class NetBoxHandler:
                 query=query
                 )["results"]
             query_key = self.obj_map[nb_obj_type]["key"]
+            # NetBox virtual interfaces do not currently support filtering
+            # by tags. Therefore we collect all virtual interfaces and
+            # filter them post collection.
+            if nb_obj_type == "virtual_interfaces":
+                log.debug("Collected %s virtual interfaces pre-filtering.")
+                nb_objects = [
+                    obj for obj in nb_objects if self.vc_tag in obj["tags"]
+                    ]
+                log.debug(
+                    "Filtered to %s virtual interfaces with '%s' tag.",
+                    len(nb_objects), self.vc_tag
+                    )
             log.info(
                 "Deleting %s NetBox %s objects.", len(nb_objects), nb_obj_type
                 )
             for obj in nb_objects:
-                # NetBox virtual interfaces do not currently support filtering
-                # by tags. Therefore we accidentally collect all virtual
-                # virtual interfaces in our query so we need to make suer we
-                # only delete the relevant ones by checking tags
-                if nb_obj_type == "virtual_interfaces" \
-                and self.vc_tag not in obj["tags"]:
-                    log.debug(
-                        "NetBox %s '%s' object does not contain '%s' tag. "
-                        "Skipping deletion.", nb_obj_type, obj[query_key],
-                        self.vc_tag
-                    )
-                    continue
                 log.info(
                     "Deleting NetBox %s '%s' object.", nb_obj_type,
                     obj[query_key]
