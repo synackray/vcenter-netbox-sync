@@ -424,7 +424,22 @@ class vCenterHandler:
                             "Collecting info for physical interface '%s'.",
                             nic_name
                             )
-                        pnic_up = pnic.spec.linkSpeed
+                        # Try multiple methods of finding link speed
+                        link_speed = pnic.spec.linkSpeed
+                        if link_speed is None:
+                            try:
+                                link_speed = "{}Mbps ".format(
+                                    pnic.validLinkSpecification[0].speedMb
+                                    )
+                            except IndexError:
+                                log.debug(
+                                    "No link speed detected for physical "
+                                    "interface '%s'.", nic_name
+                                    )
+                        else:
+                            link_speed = "{}Mbps ".format(
+                                pnic.spec.linkSpeed.speedMb
+                                )
                         results["interfaces"].append(
                             {
                                 "device": {"name": obj_name},
@@ -435,15 +450,10 @@ class vCenterHandler:
                                 "name": nic_name,
                                 # Capitalized to match NetBox format
                                 "mac_address": pnic.mac.upper(),
-                                "description": (
-                                    "{}Mbps Physical Interface".format(
-                                        pnic.spec.linkSpeed.speedMb
-                                        ) if pnic_up
-                                    else "{}Mbps Physical Interface".format(
-                                        pnic.validLinkSpecification[0].speedMb
-                                        )
+                                "description": "{}Physical Interface".format(
+                                    link_speed
                                     ),
-                                "enabled": bool(pnic_up),
+                                "enabled": bool(link_speed),
                                 "tags": self.tags
                             })
                     # Virtual Interfaces
