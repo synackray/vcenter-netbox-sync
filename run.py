@@ -386,7 +386,7 @@ class vCenterHandler:
                         serial_number = None
                     # Asset Tag
                     if "AssetTag" in hw_idents.keys():
-                        banned_tags = ["Default string", "Unknown", " "]
+                        banned_tags = ["Default string", "Unknown", " ", ""]
                         asset_tag = truncate(hw_idents["AssetTag"], max_len=50)
                         for btag in banned_tags:
                             if btag.lower() in hw_idents["AssetTag"].lower():
@@ -728,11 +728,14 @@ class NetBoxHandler:
             query if query else "",
             "{}/".format(nb_id) if nb_id else ""
             )
-        log.debug("Sending %s to '%s'", req_type.upper(), url)
+        log.debug(
+            "Sending %s to '%s' with data '%s'.", req_type.upper(), url, data
+            )
         req = getattr(self.nb_session, req_type)(
             url, json=data, timeout=10, verify=(not settings.NB_INSECURE_TLS)
             )
         # Parse status
+        log.debug("Received HTTP Status %s.", req.status_code)
         if req.status_code == 200:
             log.debug(
                 "NetBox %s request OK; returned %s status.", req_type.upper(),
@@ -763,7 +766,7 @@ class NetBoxHandler:
                     "exist or the data sent is not acceptable.", nb_obj_type
                     )
                 log.debug(
-                    "NetBox %s status reason: %s", req.status_code, req.json()
+                    "NetBox %s status reason: %s", req.status_code, req.text
                     )
             elif req_type == "put":
                 log.warning(
@@ -772,7 +775,7 @@ class NetBoxHandler:
                     req.status_code
                     )
                 log.debug(
-                    "NetBox %s status reason: %s", req.status_code, req.json()
+                    "NetBox %s status reason: %s", req.status_code, req.text
                     )
             else:
                 raise SystemExit(
@@ -799,7 +802,7 @@ class NetBoxHandler:
                     "Well this in unexpected. Please report this. "
                     "%s request received %s status with body '%s' and response "
                     "'%s'.",
-                    req_type.upper(), req.status_code, data, req.json()
+                    req_type.upper(), req.status_code, data, req.text
                     )
                 )
         return result
