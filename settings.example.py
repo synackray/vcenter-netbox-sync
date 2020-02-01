@@ -9,13 +9,12 @@ IPV6_ALLOWED = ["fe80::/10"] # IPv6 networks eligible to be synced to NetBox
 
 # vCenter Settings
 VC_HOSTS = [
-    # Hostname (FQDN or IP) and port used to access vCenter cluster
+    # Hostname (FQDN or IP), Port, User, and Password for each vCenter instance
+    # The USER argument supports SSO with @domain.tld suffix
     # You can add more vCenter instances by duplicating the line below and
     # updating the values
-    {"HOST": "vcenter1.example.com", "PORT": 443},
+    {"HOST": "vcenter1.example.com", "PORT": 443, "USER": "", "PASS": ""},
     ]
-VC_USER = "" # User account to authenticate to vCenter, supports SSO with @domain.tld suffix
-VC_PASS = "" # Password for the account defined in VC_USER
 
 # NetBox Settings
 NB_API_KEY = "" # NetBox API Key

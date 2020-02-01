@@ -33,7 +33,7 @@ def main():
     for vc_host in settings.VC_HOSTS:
         try:
             start_time = datetime.now()
-            nb = NetBoxHandler(vc_host["HOST"], vc_host["PORT"])
+            nb = NetBoxHandler(vc_conn=vc_host)
             if args.cleanup:
                 nb.remove_all()
                 log.info(
@@ -60,6 +60,7 @@ def main():
                 )
             log.debug("Connection error details: %s", err)
             continue
+
 
 def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
     """
@@ -120,6 +121,7 @@ def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
     log.debug("Final dictionary compare result: %s", result)
     return result
 
+
 def format_ip(ip_addr):
     """
     Formats IPv4 addresses to IP with CIDR standard notation.
@@ -168,6 +170,38 @@ def format_tag(tag):
         tag = truncate(tag, max_len=100)
     return tag
 
+def format_vcenter_conn(conn):
+    """
+    Formats :param conn: into the expected connection string for vCenter.
+
+    This supports the use of per-host credentials without breaking previous
+    deployments during upgrade.
+
+    :param conn: vCenter host connection details provided in settings.py
+    :type conn: dict
+    :returns: A dictionary containing the host details and credentials
+    :rtype: dict
+    """
+    try:
+        if bool(conn["USER"] != "" and conn["PASS"] != ""):
+            log.debug(
+                "Host specific vCenter credentials provided for '%s'.",
+                conn["HOST"]
+                )
+        else:
+            log.debug(
+                "Host specific vCenter credentials are not defined for '%s'.",
+                conn["HOST"]
+                )
+            conn["USER"], conn["PASS"] = settings.VC_USER, settings.VC_PASS
+    except KeyError:
+        log.debug(
+            "Host specific vCenter credential key missing for '%s'. Falling "
+            "back to global.", conn["HOST"]
+            )
+        conn["USER"], conn["PASS"] = settings.VC_USER, settings.VC_PASS
+    return conn
+
 def truncate(text="", max_len=50):
     """Ensure a string complies to the maximum length specified."""
     return text if len(text) < max_len else text[:max_len]
@@ -207,10 +241,12 @@ def verify_ip(ip_addr):
 
 class vCenterHandler:
     """Handles vCenter connection state and object data collection"""
-    def __init__(self, vc_host, vc_port):
+    def __init__(self, vc_conn):
         self.vc_session = None # Used to hold vCenter session state
-        self.vc_host = vc_host
-        self.vc_port = vc_port
+        self.vc_host = vc_conn["HOST"]
+        self.vc_port = vc_conn["PORT"]
+        self.vc_user = vc_conn["USER"]
+        self.vc_pass = vc_conn["PASS"]
         self.tags = ["Synced", "vCenter", format_tag(self.vc_host)]
 
     def authenticate(self):
@@ -223,8 +259,8 @@ class vCenterHandler:
             vc_instance = SmartConnectNoSSL(
                 host=self.vc_host,
                 port=self.vc_port,
-                user=settings.VC_USER,
-                pwd=settings.VC_PASS,
+                user=self.vc_user,
+                pwd=self.vc_pass,
                 )
             atexit.register(Disconnect, vc_instance)
             self.vc_session = vc_instance.RetrieveContent()
@@ -591,7 +627,7 @@ class vCenterHandler:
 
 class NetBoxHandler:
     """Handles NetBox connection state and interaction with API"""
-    def __init__(self, vc_host, vc_port):
+    def __init__(self, vc_conn):
         self.header = {"Authorization": "Token {}".format(settings.NB_API_KEY)}
         self.nb_api_url = "http{}://{}{}/api/".format(
             ("s" if not settings.NB_DISABLE_TLS else ""), settings.NB_FQDN,
@@ -701,8 +737,8 @@ class NetBoxHandler:
             }
         # Create an instance of the vCenter host for use in tagging functions
         # Strip to hostname if a fqdn was provided
-        self.vc_tag = format_tag(vc_host)
-        self.vc = vCenterHandler(vc_host=vc_host, vc_port=vc_port)
+        self.vc_tag = format_tag(vc_conn["HOST"])
+        self.vc = vCenterHandler(format_vcenter_conn(vc_conn))
 
     def request(self, req_type, nb_obj_type, data=None, query=None, nb_id=None):
         """
