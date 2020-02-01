@@ -478,7 +478,9 @@ class vCenterHandler:
                                 )
                         results["interfaces"].append(
                             {
-                                "device": {"name": obj_name},
+                                "device": {
+                                    "name": truncate(obj_name, max_len=64)
+                                    },
                                 # Interface speed is placed in the description
                                 # as it is irrelevant to making connections and
                                 # an error prone mapping process
@@ -501,7 +503,9 @@ class vCenterHandler:
                             )
                         results["interfaces"].append(
                             {
-                                "device": {"name": obj_name},
+                                "device": {
+                                    "name": truncate(obj_name, max_len=64)
+                                    },
                                 "type": 0, # 0 = Virtual
                                 "name": nic_name,
                                 "mac_address": vnic.spec.mac.upper(),
@@ -523,7 +527,7 @@ class vCenterHandler:
                                 "tenant": None, # Collected from prefix
                                 "interface": {
                                     "device": {
-                                        "name": obj_name
+                                        "name": truncate(obj_name, max_len=64)
                                         },
                                     "name": nic_name,
                                     },
@@ -578,7 +582,9 @@ class vCenterHandler:
                                 )
                             results["virtual_interfaces"].append(
                                 {
-                                    "virtual_machine": {"name": obj_name},
+                                    "virtual_machine": {
+                                        "name": truncate(obj_name, max_len=64)
+                                        },
                                     "type": 0, # 0 = Virtual
                                     "name": nic_name,
                                     "mac_address": nic.macAddress.upper(),
@@ -605,7 +611,9 @@ class vCenterHandler:
                                             "tenant": None,
                                             "interface": {
                                                 "virtual_machine": {
-                                                    "name": obj_name
+                                                    "name": truncate(
+                                                        obj_name, max_len=64
+                                                        )
                                                     },
                                                 "name": nic_name,
                                                 },
