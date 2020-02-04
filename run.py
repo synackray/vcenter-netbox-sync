@@ -1260,7 +1260,8 @@ class NetBoxHandler:
                 )
             query = "?tag={}".format(
                 # vCenter site is a global dependency so we change the query
-                "vcenter" if nb_obj_type == "sites" else self.vc_tag
+                "vcenter" if nb_obj_type == "sites"
+                else format_slug(self.vc_tag)
                 )
             nb_objects = self.request(
                 req_type="get", nb_obj_type=nb_obj_type,
