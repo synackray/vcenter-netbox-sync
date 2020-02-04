@@ -241,7 +241,8 @@ def verify_ip(ip_addr):
 
 class vCenterHandler:
     """Handles vCenter connection state and object data collection"""
-    def __init__(self, vc_conn):
+    def __init__(self, vc_conn, nb_api_version):
+        self.nb_api_version = nb_api_version
         self.vc_session = None # Used to hold vCenter session state
         self.vc_host = vc_conn["HOST"]
         self.vc_port = vc_conn["PORT"]
@@ -300,6 +301,25 @@ class vCenterHandler:
             [vc_obj_views[vc_obj_type]], # Object types to look for
             True # Should we recurively look into view
             )
+
+    def _format_value(self, key, value):
+        """
+        Formats object values depending on the NetBox API version.
+
+        Prior to NetBox API v2.7 NetBox used integers for status and type
+        fields. We use the version of NetBox API to determine whether we need
+        to return integers or named strings.
+        """
+        if self.nb_api_version > 2.6:
+            if key == "status":
+                translation = {0: "offline", 1: "active"}
+            elif key == "type":
+                translation = {0: "virtual", 32767: "other"}
+            result = translation[value]
+        else:
+            result = value
+        return result
+
 
     def get_objects(self, vc_obj_type):
         """
@@ -442,7 +462,9 @@ class vCenterHandler:
                             "serial": serial_number,
                             "asset_tag": asset_tag,
                             "cluster": {"name": cluster},
-                            "status": ( # 0 = Offline / 1 = Active
+                            "status": self._format_value(
+                                "status",
+                                # 0 = Offline / 1 = Active
                                 1 if obj.summary.runtime.connectionState == \
                                 "connected"
                                 else 0
@@ -484,7 +506,7 @@ class vCenterHandler:
                                 # Interface speed is placed in the description
                                 # as it is irrelevant to making connections and
                                 # an error prone mapping process
-                                "type": 32767, # 32767 = Other
+                                "type": self._format_value("type", 32767),
                                 "name": nic_name,
                                 # Capitalized to match NetBox format
                                 "mac_address": pnic.mac.upper(),
@@ -506,7 +528,7 @@ class vCenterHandler:
                                 "device": {
                                     "name": truncate(obj_name, max_len=64)
                                     },
-                                "type": 0, # 0 = Virtual
+                                "type": self._format_value("type", 0),
                                 "name": nic_name,
                                 "mac_address": vnic.spec.mac.upper(),
                                 "mtu": vnic.spec.mtu,
@@ -556,8 +578,13 @@ class vCenterHandler:
                     results["virtual_machines"].append(
                         {
                             "name": truncate(obj_name, max_len=64),
-                            "status": 1 if obj.runtime.powerState == "poweredOn"
-                                      else 0,
+                            "status": self._format_value(
+                                "status",
+                                int(
+                                    1 if obj.runtime.powerState == "poweredOn"
+                                    else 0
+                                    )
+                                ),
                             "cluster": {"name": cluster},
                             "role": {"name": "Server"},
                             "platform": platform,
@@ -585,7 +612,7 @@ class vCenterHandler:
                                     "virtual_machine": {
                                         "name": truncate(obj_name, max_len=64)
                                         },
-                                    "type": 0, # 0 = Virtual
+                                    "type": self._format_value("type", 0),
                                     "name": nic_name,
                                     "mac_address": nic.macAddress.upper(),
                                     "enabled": nic.connected,
@@ -641,7 +668,7 @@ class NetBoxHandler:
             ("s" if not settings.NB_DISABLE_TLS else ""), settings.NB_FQDN,
             (":{}".format(settings.NB_PORT) if settings.NB_PORT != 443 else "")
             )
-        self.nb_session = None
+        self.nb_session = self._create_nb_session()
         # NetBox object type relationships when working in the API
         self.obj_map = {
             "cluster_groups": {
@@ -746,7 +773,25 @@ class NetBoxHandler:
         # Create an instance of the vCenter host for use in tagging functions
         # Strip to hostname if a fqdn was provided
         self.vc_tag = format_tag(vc_conn["HOST"])
-        self.vc = vCenterHandler(format_vcenter_conn(vc_conn))
+        self.vc = vCenterHandler(
+            format_vcenter_conn(vc_conn), nb_api_version=self._get_api_version()
+            )
+
+    def _create_nb_session(self):
+        """Creates a session with NetBox."""
+        session = requests.Session()
+        session.headers.update(self.header)
+        log.info("Created new HTTP Session for NetBox.")
+        return session
+
+    def _get_api_version(self):
+        """Determines the current NetBox API Version"""
+        with self.nb_session.get(
+                self.nb_api_url, timeout=10,
+                verify=(not settings.NB_INSECURE_TLS)) as resp:
+            result = float(resp.headers["API-Version"])
+        log.info("Detected NetBox API v%s.", result)
+        return result
 
     def request(self, req_type, nb_obj_type, data=None, query=None, nb_id=None):
         """
@@ -758,11 +803,6 @@ class NetBoxHandler:
         query: String used to filter results when using GET method
         nb_id: Integer used when working with a single NetBox object
         """
-        # If an existing session is not already found then create it
-        # The goal here is session re-use without TCP handshake on every request
-        if not self.nb_session:
-            self.nb_session = requests.Session()
-            self.nb_session.headers.update(self.header)
         result = None
         # Generate URL
         url = "{}{}/{}/{}{}".format(
