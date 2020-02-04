@@ -113,7 +113,11 @@ def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
                 "Mismatch: %s value is '%s' while %s value is '%s'.",
                 dict1_path, dict1[key], dict2_path, dict2[key]
                 )
-            result = False
+            # Allow the modification of device sites by ignoring the value
+            if "site" in path and key == "name":
+                log.debug("Site mismatch is allowed. Moving on.")
+            else:
+                result = False
         if result:
             log.debug("%s and %s values match.", dict1_path, dict2_path)
         else:
