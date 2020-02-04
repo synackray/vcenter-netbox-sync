@@ -47,6 +47,7 @@ def main():
                 nb.sync_objects(vc_obj_type="clusters")
                 nb.sync_objects(vc_obj_type="hosts")
                 nb.sync_objects(vc_obj_type="virtual_machines")
+                nb.set_primary_ips()
                 log.info(
                     "Completed sync with vCenter instance '%s'! Total "
                     "execution time %s.", vc_host["HOST"],
@@ -748,6 +749,29 @@ class NetBoxHandler:
         self.vc_tag = format_tag(vc_conn["HOST"])
         self.vc = vCenterHandler(format_vcenter_conn(vc_conn))
 
+    def get_primary_ip(self, nb_obj_type, nb_id):
+        """Collects the primary IP of a NetBox device or virtual machine."""
+        query_key = str(
+            "device_id" if nb_obj_type == "devices" else "virtual_machine_id"
+            )
+        req = self.request(
+            req_type="get", nb_obj_type="ip_addresses",
+            query="?{}={}".format(query_key, nb_id)
+            )
+        log.debug("Found %s child IP addresses.", req["count"])
+        if req["count"] > 0:
+            result = {
+                "address": req["results"][0]["address"],
+                "id": req["results"][0]["id"]
+                }
+            log.debug(
+                "Selected %s (ID: %s) as primary IP.", result["address"],
+                result["id"]
+                )
+        else:
+            result = None
+        return result
+
     def request(self, req_type, nb_obj_type, data=None, query=None, nb_id=None):
         """
         HTTP requests and exception handler for NetBox
@@ -942,6 +966,74 @@ class NetBoxHandler:
             self.request(
                 req_type="post", nb_obj_type=nb_obj_type, data=vc_data
                 )
+
+    def set_primary_ips(self):
+        """Sets the Primary IP of vCenter hosts and Virtual Machines."""
+        for nb_obj_type in ("devices", "virtual_machines"):
+            log.info(
+                "Collecting NetBox %s objects to set Primary IPs.",
+                nb_obj_type[:-1].replace("_", " ")
+                )
+            obj_key = self.obj_map[nb_obj_type]["key"]
+            # Collect all parent objects that support Primary IPs
+            parents = self.request(
+                req_type="get", nb_obj_type=nb_obj_type,
+                query="?tag={}".format(format_slug(self.vc_tag))
+                )
+            log.info("Collected %s NetBox objects.", parents["count"])
+            for nb_obj in parents["results"]:
+                update_object = False
+                parent_id = nb_obj["id"]
+                nb_obj_name = nb_obj[obj_key]
+                new_pri_ip = self.get_primary_ip(nb_obj_type, parent_id)
+                # Skip the rest if we don't have a usable IP
+                if new_pri_ip is None:
+                    log.info(
+                        "No usable IPs were found for NetBox '%s' object. "
+                        "Moving on.",
+                        nb_obj_name
+                        )
+                    continue
+                if nb_obj["primary_ip"] is None:
+                    log.info(
+                        "No existing Primary IP found for NetBox '%s' object.",
+                        nb_obj_name
+                        )
+                    update_object = True
+                else:
+                    log.info(
+                        "Primary IP already set for NetBox '%s' object. "
+                        "Comparing.",
+                        nb_obj_name
+                        )
+                    old_pri_ip = nb_obj["primary_ip"]["id"]
+                    if old_pri_ip != new_pri_ip["id"]:
+                        log.info(
+                            "Existing Primary IP does not match latest check. "
+                            "Requesting update."
+                            )
+                        update_object = True
+                    else:
+                        log.info(
+                            "Existing Primary IP matches latest check. Moving "
+                            "on."
+                            )
+                if update_object:
+                    log.info(
+                        "Setting NetBox '%s' object primary IP to %s.",
+                        nb_obj_name, new_pri_ip["address"]
+                        )
+                    ip_version = str(
+                        "primary_ip{}".format(
+                            ip_network(
+                                new_pri_ip["address"], strict=False
+                                ).version
+                        ))
+                    data = {ip_version: new_pri_ip["id"]}
+                    self.request(
+                        req_type="patch", nb_obj_type=nb_obj_type,
+                        nb_id=parent_id, data=data
+                        )
 
     def sync_objects(self, vc_obj_type):
         """
