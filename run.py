@@ -113,7 +113,11 @@ def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
                 "Mismatch: %s value is '%s' while %s value is '%s'.",
                 dict1_path, dict1[key], dict2_path, dict2[key]
                 )
-            result = False
+            # Allow the modification of device sites by ignoring the value
+            if "site" in path and key == "name":
+                log.debug("Site mismatch is allowed. Moving on.")
+            else:
+                result = False
         if result:
             log.debug("%s and %s values match.", dict1_path, dict2_path)
         else:
@@ -876,7 +880,7 @@ class NetBoxHandler:
                 log.debug(
                     "NetBox %s status reason: %s", req.status_code, req.text
                     )
-            elif req_type == "put":
+            elif req_type == "patch":
                 log.warning(
                     "NetBox failed to modify %s object with status %s. The "
                     "data sent may not be acceptable.", nb_obj_type,
@@ -963,7 +967,7 @@ class NetBoxHandler:
                     nb_obj_type, vc_data[query_key]
                     )
                 self.request(
-                    req_type="put", nb_obj_type=nb_obj_type, data=vc_data,
+                    req_type="patch", nb_obj_type=nb_obj_type, data=vc_data,
                     nb_id=nb_data["id"]
                     )
             elif compare_dicts(
@@ -986,8 +990,16 @@ class NetBoxHandler:
                     vc_data["tags"] = list(
                         set(vc_data["tags"] + nb_data["tags"])
                         )
+                # Remove site from existing NetBox host objects to allow for
+                # user modifications
+                if nb_obj_type == "devices":
+                    del vc_data["site"]
+                    log.debug(
+                        "Removed site from %s object before sending update "
+                        "to NetBox.", vc_data[query_key]
+                        )
                 self.request(
-                    req_type="put", nb_obj_type=nb_obj_type, data=vc_data,
+                    req_type="patch", nb_obj_type=nb_obj_type, data=vc_data,
                     nb_id=nb_data["id"]
                     )
         elif req["count"] > 1:
