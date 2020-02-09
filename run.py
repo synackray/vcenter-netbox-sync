@@ -16,66 +16,24 @@ from logger import log
 from templates.netbox import Templates
 
 
-def main():
-    """Main function to run if script is called directly"""
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-c", "--cleanup", action="store_true",
-        help="Remove all vCenter synced objects which support tagging. This "
-             "is helpful if you want to start fresh or stop using this script."
-        )
-    parser.add_argument(
-        "-v", "--verbose", action="store_true",
-        help="Enable verbose output. This overrides the log level in the "
-             "settings file. Intended for debugging purposes only."
-        )
-    args = parser.parse_args()
-    if args.verbose:
-        log.setLevel("DEBUG")
-        log.debug("Log level has been overriden by the --verbose argument.")
-    for vc_host in settings.VC_HOSTS:
-        try:
-            start_time = datetime.now()
-            nb = NetBoxHandler(vc_conn=vc_host)
-            if args.cleanup:
-                nb.remove_all()
-                log.info(
-                    "Completed removal of vCenter instance '%s' objects. Total "
-                    "execution time %s.",
-                    vc_host["HOST"], (datetime.now() - start_time)
-                    )
-            else:
-                nb.verify_dependencies()
-                nb.sync_objects(vc_obj_type="datacenters")
-                nb.sync_objects(vc_obj_type="clusters")
-                nb.sync_objects(vc_obj_type="hosts")
-                nb.sync_objects(vc_obj_type="virtual_machines")
-                nb.set_primary_ips()
-                # Optional tasks
-                if settings.POPULATE_DNS_NAME:
-                    nb.set_dns_names()
-                log.info(
-                    "Completed sync with vCenter instance '%s'! Total "
-                    "execution time %s.", vc_host["HOST"],
-                    (datetime.now() - start_time)
-                    )
-        except (ConnectionError, requests.exceptions.ConnectionError,
-                requests.exceptions.ReadTimeout) as err:
-            log.warning(
-                "Critical connection error occurred. Skipping sync with '%s'.",
-                vc_host["HOST"]
-                )
-            log.debug("Connection error details: %s", err)
-            continue
-
-
 def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
     """
-    Compares the key value pairs of two dictionaries and match boolean.
+    Compares the key value pairs of two dictionaries returns whether they match.
 
     dict1 keys and values are compared against dict2. dict2 may have keys and
-    values that dict1 does not care evaluate.
-    dict1_name and dict2_name allow you to overwrite dictionary name for logs.
+    values that dict1 does not evaluate against.
+    :param dict1: Primary dictionary to compare against :param dict2:
+    :type dict1: dict
+    :param dict2: Dictionary being compared to by :param dict1:
+    :type dict2: dict
+    :param dict1_name: Friendly name of :param dict1: for log messages
+    :type dict1_name: str
+    :param dict2_name: Friendly name of :param dict1: for log messages
+    :type dict2_name: str
+    :param path: Used to keep state of nested dictionary traversal
+    :type path: str
+    :return: `True` if :param dict2: matches all keys and values in :param dict2: else `False`
+    :rtype: bool
     """
     # Setup paths to track key exploration. The path parameter is used to allow
     # recursive comparisions and track what's being compared.
@@ -135,9 +93,12 @@ def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
 
 def format_ip(ip_addr):
     """
-    Formats IPv4 addresses to IP with CIDR standard notation.
+    Formats IPv4 addresses and subnet to IP with CIDR standard notation.
 
-    ip_address expects IP and subnet mask, example: 192.168.0.0/255.255.255.0
+    :param ip_addr: IP address with subnet; example `192.168.0.0/255.255.255.0`
+    :type ip_addr: str
+    :return: IP address with CIDR notation; example `192.168.0.0/24`
+    :rtype: str
     """
     ip = ip_addr.split("/")[0]
     cidr = ip_network(ip_addr, strict=False).prefixlen
@@ -145,12 +106,15 @@ def format_ip(ip_addr):
     log.debug("Converted '%s' to CIDR notation '%s'.", ip_addr, result)
     return result
 
+
 def format_slug(text):
     """
     Format string to comply to NetBox slug acceptable pattern and max length.
 
-    NetBox slug pattern: ^[-a-zA-Z0-9_]+$
-    NetBox slug max length: 50 characters
+    :param text: Text to be formatted into an acceptable slug
+    :type text: str
+    :return: Slug of allowed characters [-a-zA-Z0-9_] with max length of 50
+    :rtype: str
     """
     allowed_chars = (
         "abcdefghijklmnopqrstuvxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" # Alphabet
@@ -213,6 +177,60 @@ def format_vcenter_conn(conn):
         conn["USER"], conn["PASS"] = settings.VC_USER, settings.VC_PASS
     return conn
 
+
+def main():
+    """Main function ran when the script is called directly."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-c", "--cleanup", action="store_true",
+        help="Remove all vCenter synced objects which support tagging. This "
+             "is helpful if you want to start fresh or stop using this script."
+        )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="Enable verbose output. This overrides the log level in the "
+             "settings file. Intended for debugging purposes only."
+        )
+    args = parser.parse_args()
+    if args.verbose:
+        log.setLevel("DEBUG")
+        log.debug("Log level has been overriden by the --verbose argument.")
+    for vc_host in settings.VC_HOSTS:
+        try:
+            start_time = datetime.now()
+            nb = NetBoxHandler(vc_conn=vc_host)
+            if args.cleanup:
+                nb.remove_all()
+                log.info(
+                    "Completed removal of vCenter instance '%s' objects. Total "
+                    "execution time %s.",
+                    vc_host["HOST"], (datetime.now() - start_time)
+                    )
+            else:
+                nb.verify_dependencies()
+                nb.sync_objects(vc_obj_type="datacenters")
+                nb.sync_objects(vc_obj_type="clusters")
+                nb.sync_objects(vc_obj_type="hosts")
+                nb.sync_objects(vc_obj_type="virtual_machines")
+                nb.set_primary_ips()
+                # Optional tasks
+                if settings.POPULATE_DNS_NAME:
+                    nb.set_dns_names()
+                log.info(
+                    "Completed sync with vCenter instance '%s'! Total "
+                    "execution time %s.", vc_host["HOST"],
+                    (datetime.now() - start_time)
+                    )
+        except (ConnectionError, requests.exceptions.ConnectionError,
+                requests.exceptions.ReadTimeout) as err:
+            log.warning(
+                "Critical connection error occurred. Skipping sync with '%s'.",
+                vc_host["HOST"]
+                )
+            log.debug("Connection error details: %s", err)
+            continue
+
+
 def queue_dns_lookups(ips):
     """
     Queue handler for reverse DNS lokups.
@@ -229,6 +247,7 @@ def queue_dns_lookups(ips):
     queue = asyncio.gather(*(reverse_lookup(resolver, ip) for ip in ips))
     results = loop.run_until_complete(queue)
     return results
+
 
 async def reverse_lookup(resolver, ip):
     """
@@ -259,9 +278,11 @@ async def reverse_lookup(resolver, ip):
         log.info("Unable to find record for %s: %s", ip, err.args[1])
     return result
 
+
 def truncate(text="", max_len=50):
     """Ensure a string complies to the maximum length specified."""
     return text if len(text) < max_len else text[:max_len]
+
 
 def verify_ip(ip_addr):
     """
@@ -295,6 +316,7 @@ def verify_ip(ip_addr):
         log.debug("Validation of %s failed. Received error: %s", ip_addr, err)
     log.debug("IP '%s' validation returned a %s status.", ip_addr, result)
     return result
+
 
 class vCenterHandler:
     """Handles vCenter connection state and object data collection"""
