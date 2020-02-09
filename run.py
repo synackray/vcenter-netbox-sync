@@ -11,6 +11,7 @@ from pyVim.connect import SmartConnectNoSSL, Disconnect
 from pyVmomi import vim
 import settings
 from logger import log
+from templates.netbox import Templates
 
 
 def main():
@@ -351,6 +352,8 @@ class vCenterHandler:
                 ]
             }
         results = {}
+        # Setup use of NetBox templates
+        nbt = Templates(api_version=self.nb_api_version)
         # Initalize keys expected to be returned
         for nb_obj_type in obj_type_map[vc_obj_type]:
             results.setdefault(nb_obj_type, [])
@@ -364,67 +367,57 @@ class vCenterHandler:
                     vc_obj_type, obj_name
                     )
                 if vc_obj_type == "datacenters":
-                    results["cluster_groups"].append(
-                        {
-                            "name": truncate(obj_name, max_len=50),
-                            "slug": format_slug(obj_name),
-                        })
+                    results["cluster_groups"].append(nbt.cluster_group(
+                        name=obj_name
+                        ))
                 elif vc_obj_type == "clusters":
-                    cluster_group = truncate(obj.parent.parent.name, max_len=50)
-                    results["clusters"].append(
-                        {
-                            "name": truncate(obj_name, max_len=100),
-                            "type": {"name": "VMware ESXi"},
-                            "group": {"name": cluster_group},
-                            "tags": self.tags
-                        })
+                    results["clusters"].append(nbt.cluster(
+                        name=obj_name,
+                        ctype="VMware ESXi",
+                        group=obj.parent.parent.name,
+                        tags=self.tags
+                        ))
                 elif vc_obj_type == "hosts":
                     obj_manuf_name = truncate(
                         obj.summary.hardware.vendor, max_len=50
                         )
+                    obj_model = truncate(obj.summary.hardware.model, max_len=50)
                     # NetBox Manufacturers and Device Types are susceptible to
                     # duplication as they are parents to multiple objects
                     # To avoid unnecessary querying we check to make sure they
                     # haven't already been collected
-                    duplicate = {"manufacturers": False, "device_types": False}
-                    if obj_manuf_name in \
-                    [res["name"] for res in results["manufacturers"]]:
-                        duplicate["manufacturers"] = True
-                        log.debug(
-                            "Manufacturers object already exists. Skipping."
-                            )
-                    if not duplicate["manufacturers"]:
+                    if not obj_manuf_name in [
+                            res["name"] for res in results["manufacturers"]]:
                         log.debug(
                             "Collecting info to create NetBox manufacturers "
                             "object."
                             )
-                        results["manufacturers"].append(
-                            {
-                                "name": obj_manuf_name,
-                                "slug": format_slug(obj_manuf_name)
-                            })
-                    obj_model = truncate(obj.summary.hardware.model, max_len=50)
-                    if obj_model in \
-                    [res["model"] for res in results["device_types"]]:
-                        duplicate["device_types"] = True
+                        results["manufacturers"].append(nbt.manufacturer(
+                            name=obj_manuf_name
+                            ))
+                    else:
                         log.debug(
-                            "Device Types object already exists. Skipping."
+                            "Manufacturers object '%s' already exists. "
+                            "Skipping.", obj_manuf_name
                             )
-                    if not duplicate["device_types"]:
+                    if not obj_model in [
+                            res["model"] for res in
+                            results["device_types"]]:
                         log.debug(
                             "Collecting info to create NetBox device_types "
                             "object."
                             )
-                        results["device_types"].append(
-                            {
-                                "manufacturer": {
-                                    "name": obj_manuf_name
-                                    },
-                                "model": obj_model,
-                                "slug": format_slug(obj_model),
-                                "part_number": obj_model,
-                                "tags": self.tags
-                            })
+                        results["device_types"].append(nbt.device_type(
+                            manufacturer=obj_manuf_name,
+                            model=obj_model,
+                            part_number=obj_model,
+                            tags=self.tags
+                            ))
+                    else:
+                        log.debug(
+                            "Device Type object '%s' already exists. "
+                            "Skipping.", obj_model
+                            )
                     log.debug(
                         "Collecting info to create NetBox devices object."
                         )
@@ -438,44 +431,39 @@ class vCenterHandler:
                     # Serial Number
                     if "EnclosureSerialNumberTag" in hw_idents.keys():
                         serial_number = hw_idents["EnclosureSerialNumberTag"]
-                        serial_number = truncate(serial_number, max_len=50)
                     elif "ServiceTag" in hw_idents.keys() \
                     and " " not in hw_idents["ServiceTag"]:
                         serial_number = hw_idents["ServiceTag"]
-                        serial_number = truncate(serial_number, max_len=50)
                     else:
                         serial_number = None
                     # Asset Tag
                     if "AssetTag" in hw_idents.keys():
+                        asset_tag = hw_idents["AssetTag"].lower()
                         banned_tags = ["Default string", "Unknown", " ", ""]
-                        asset_tag = truncate(hw_idents["AssetTag"], max_len=50)
-                        for btag in banned_tags:
-                            if btag.lower() in hw_idents["AssetTag"].lower():
-                                log.debug("Banned asset tag string. Nulling.")
-                                asset_tag = None
-                                break
+                        banned_tags = [t.lower() for t in banned_tags]
+                        if asset_tag in banned_tags:
+                            log.debug("Banned asset tag string. Nulling.")
+                            asset_tag = None
                     else:
+                        log.debug(
+                            "No asset tag detected for device '%s'.", obj_name
+                            )
                         asset_tag = None
-                    cluster = truncate(obj.parent.name, max_len=100)
-                    results["devices"].append(
-                        {
-                            "name": truncate(obj_name, max_len=64),
-                            "device_type": {"model": obj_model},
-                            "device_role": {"name": "Server"},
-                            "platform": {"name": "VMware ESXi"},
-                            "site": {"name": "vCenter"},
-                            "serial": serial_number,
-                            "asset_tag": asset_tag,
-                            "cluster": {"name": cluster},
-                            "status": self._format_value(
-                                "status",
-                                # 0 = Offline / 1 = Active
-                                1 if obj.summary.runtime.connectionState == \
-                                "connected"
-                                else 0
-                                ),
-                            "tags": self.tags
-                        })
+                    results["devices"].append(nbt.device(
+                        name=truncate(obj_name, max_len=64),
+                        device_role="Server",
+                        device_type=obj_model,
+                        platform="VMware ESXi",
+                        site="vCenter",
+                        serial=serial_number,
+                        asset_tag=asset_tag,
+                        cluster=obj.parent.name,
+                        status=int(
+                            1 if obj.summary.runtime.connectionState ==
+                            "connected" else 0
+                            ),
+                        tags=self.tags
+                        ))
                     # Iterable object types
                     # Physical Interfaces
                     log.debug(
@@ -503,24 +491,20 @@ class vCenterHandler:
                             link_speed = "{}Mbps ".format(
                                 pnic.spec.linkSpeed.speedMb
                                 )
-                        results["interfaces"].append(
-                            {
-                                "device": {
-                                    "name": truncate(obj_name, max_len=64)
-                                    },
-                                # Interface speed is placed in the description
-                                # as it is irrelevant to making connections and
-                                # an error prone mapping process
-                                "type": self._format_value("type", 32767),
-                                "name": nic_name,
-                                # Capitalized to match NetBox format
-                                "mac_address": pnic.mac.upper(),
-                                "description": "{}Physical Interface".format(
-                                    link_speed
-                                    ),
-                                "enabled": bool(link_speed),
-                                "tags": self.tags
-                            })
+                        results["interfaces"].append(nbt.device_interface(
+                            device=truncate(obj_name, max_len=64),
+                            name=nic_name,
+                            itype=32767,  # Other
+                            mac_address=pnic.mac,
+                            # Interface speed is placed in the description as it
+                            # is irrelevant to making connections and an error
+                            # prone mapping process
+                            description="{}Physical Interface".format(
+                                link_speed
+                                ),
+                            enabled=bool(link_speed),
+                            tags=self.tags,
+                            ))
                     # Virtual Interfaces
                     for vnic in obj.config.network.vnic:
                         nic_name = truncate(vnic.device, max_len=64)
@@ -528,38 +512,28 @@ class vCenterHandler:
                             "Collecting info for virtual interface '%s'.",
                             nic_name
                             )
-                        results["interfaces"].append(
-                            {
-                                "device": {
-                                    "name": truncate(obj_name, max_len=64)
-                                    },
-                                "type": self._format_value("type", 0),
-                                "name": nic_name,
-                                "mac_address": vnic.spec.mac.upper(),
-                                "mtu": vnic.spec.mtu,
-                                "tags": self.tags
-                            })
+                        results["interfaces"].append(nbt.device_interface(
+                            device=truncate(obj_name, max_len=64),
+                            name=nic_name,
+                            itype=0,  # Virtual
+                            mac_address=vnic.spec.mac,
+                            mtu=vnic.spec.mtu,
+                            tags=self.tags,
+                            ))
                         # IP Addresses
                         ip_addr = vnic.spec.ip.ipAddress
                         log.debug(
                             "Collecting info for IP Address '%s'.",
                             ip_addr
                             )
-                        results["ip_addresses"].append(
-                            {
-                                "address": "{}/{}".format(
-                                    ip_addr, vnic.spec.ip.subnetMask
-                                    ),
-                                "vrf": None, # Collected from prefix
-                                "tenant": None, # Collected from prefix
-                                "interface": {
-                                    "device": {
-                                        "name": truncate(obj_name, max_len=64)
-                                        },
-                                    "name": nic_name,
-                                    },
-                                "tags": self.tags
-                            })
+                        results["ip_addresses"].append(nbt.ip_address(
+                            address="{}/{}".format(
+                                ip_addr, vnic.spec.ip.subnetMask
+                                ),
+                            device=truncate(obj_name, max_len=64),
+                            interface=nic_name,
+                            tags=self.tags,
+                            ))
                 elif vc_obj_type == "virtual_machines":
                     log.info(
                         "Collecting info about vCenter %s '%s' object.",
@@ -580,28 +554,23 @@ class vCenterHandler:
                             platform = {"name": "Linux"}
                         elif "windows" in vm_family:
                             platform = {"name": "Windows"}
-                    results["virtual_machines"].append(
-                        {
-                            "name": truncate(obj_name, max_len=64),
-                            "status": self._format_value(
-                                "status",
-                                int(
-                                    1 if obj.runtime.powerState == "poweredOn"
-                                    else 0
-                                    )
-                                ),
-                            "cluster": {"name": cluster},
-                            "role": {"name": "Server"},
-                            "platform": platform,
-                            "memory": obj.config.hardware.memoryMB,
-                            "disk": int(sum([
-                                comp.capacityInKB for comp in
-                                obj.config.hardware.device
-                                if isinstance(comp, vim.vm.device.VirtualDisk)
-                                ]) / 1024 / 1024), # Kilobytes to Gigabytes
-                            "vcpus": obj.config.hardware.numCPU,
-                            "tags": self.tags
-                        })
+                    results["virtual_machines"].append(nbt.virtual_machine(
+                        name=truncate(obj_name, max_len=64),
+                        cluster=cluster,
+                        status=int(
+                            1 if obj.runtime.powerState == "poweredOn" else 0
+                            ),
+                        role="Server",
+                        platform=platform,
+                        memory=obj.config.hardware.memoryMB,
+                        disk=int(sum([
+                            comp.capacityInKB for comp in
+                            obj.config.hardware.device
+                            if isinstance(comp, vim.vm.device.VirtualDisk)
+                            ]) / 1024 / 1024),  # Kilobytes to Gigabytes
+                        vcpus=obj.config.hardware.numCPU,
+                        tags=self.tags
+                        ))
                     # If VMware Tools is not detected then we cannot reliably
                     # collect interfaces and IP addresses
                     if vm_family:
@@ -613,44 +582,31 @@ class vCenterHandler:
                                 nic_name
                                 )
                             results["virtual_interfaces"].append(
-                                {
-                                    "virtual_machine": {
-                                        "name": truncate(obj_name, max_len=64)
-                                        },
-                                    "type": self._format_value("type", 0),
-                                    "name": nic_name,
-                                    "mac_address": nic.macAddress.upper(),
-                                    "enabled": nic.connected,
-                                    "tags": self.tags
-                                })
+                                nbt.vm_interface(
+                                    virtual_machine=obj_name,
+                                    itype=0,
+                                    name=nic_name,
+                                    mac_address=nic.macAddress,
+                                    enabled=nic.connected,
+                                    tags=self.tags
+                                ))
                             # IP Addresses
                             if nic.ipConfig is not None:
                                 for ip in nic.ipConfig.ipAddress:
-                                    ip_addr = ip.ipAddress
+                                    ip_addr = "{}/{}".format(
+                                        ip.ipAddress, ip.prefixLength
+                                        )
                                     log.debug(
                                         "Collecting info for IP Address '%s'.",
                                         ip_addr
                                         )
                                     results["ip_addresses"].append(
-                                        {
-                                            "address": "{}/{}".format(
-                                                ip_addr, ip.prefixLength
-                                                ),
-                                            # VRF and Tenant are initialized
-                                            # to be later collected through a
-                                            # prefix search
-                                            "vrf": None,
-                                            "tenant": None,
-                                            "interface": {
-                                                "virtual_machine": {
-                                                    "name": truncate(
-                                                        obj_name, max_len=64
-                                                        )
-                                                    },
-                                                "name": nic_name,
-                                                },
-                                            "tags": self.tags
-                                        })
+                                        nbt.ip_address(
+                                            address=ip_addr,
+                                            virtual_machine=obj_name,
+                                            interface=nic_name,
+                                            tags=self.tags
+                                            ))
             except AttributeError:
                 log.warning(
                     "Unable to collect necessary data for vCenter %s '%s'"
@@ -668,12 +624,12 @@ class vCenterHandler:
 class NetBoxHandler:
     """Handles NetBox connection state and interaction with API"""
     def __init__(self, vc_conn):
-        self.header = {"Authorization": "Token {}".format(settings.NB_API_KEY)}
         self.nb_api_url = "http{}://{}{}/api/".format(
             ("s" if not settings.NB_DISABLE_TLS else ""), settings.NB_FQDN,
             (":{}".format(settings.NB_PORT) if settings.NB_PORT != 443 else "")
             )
         self.nb_session = self._create_nb_session()
+        self.nb_api_version = self._get_api_version()
         # NetBox object type relationships when working in the API
         self.obj_map = {
             "cluster_groups": {
@@ -783,9 +739,16 @@ class NetBoxHandler:
             )
 
     def _create_nb_session(self):
-        """Creates a session with NetBox."""
+        """
+        Creates a session with NetBox
+
+        :return: `True` if session created else `False`
+        :rtype: bool
+        """
+        header = {"Authorization": "Token {}".format(settings.NB_API_KEY)}
         session = requests.Session()
-        session.headers.update(self.header)
+        session.headers.update(header)
+        self.nb_session = session
         log.info("Created new HTTP Session for NetBox.")
         return session
 
