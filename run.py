@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Exports vCenter objects and imports them into Netbox via Python3"""
 
+import asyncio
 import atexit
 from socket import gaierror
 from datetime import date, datetime
 from ipaddress import ip_network
 import argparse
+import aiodns
 import requests
 from pyVim.connect import SmartConnectNoSSL, Disconnect
 from pyVmomi import vim
@@ -49,6 +51,9 @@ def main():
                 nb.sync_objects(vc_obj_type="hosts")
                 nb.sync_objects(vc_obj_type="virtual_machines")
                 nb.set_primary_ips()
+                # Optional tasks
+                if settings.POPULATE_DNS_NAME:
+                    nb.set_dns_names()
                 log.info(
                     "Completed sync with vCenter instance '%s'! Total "
                     "execution time %s.", vc_host["HOST"],
@@ -207,6 +212,52 @@ def format_vcenter_conn(conn):
             )
         conn["USER"], conn["PASS"] = settings.VC_USER, settings.VC_PASS
     return conn
+
+def queue_dns_lookups(ips):
+    """
+    Queue handler for reverse DNS lokups.
+
+    :param ips: A list of IP addresses to queue for PTR lookup.
+    :type ips: list
+    :return: IP addresses and their respective PTR record
+    :rtype: dict
+    """
+    loop = asyncio.get_event_loop()
+    resolver = aiodns.DNSResolver(loop=loop)
+    if settings.CUSTOM_DNS_SERVERS and settings.DNS_SERVERS:
+        resolver.nameservers = settings.DNS_SERVERS
+    queue = asyncio.gather(*(reverse_lookup(resolver, ip) for ip in ips))
+    results = loop.run_until_complete(queue)
+    return results
+
+async def reverse_lookup(resolver, ip):
+    """
+    Queries for PTR record of the IP provided with async support.
+
+    :param resolver: aiodns resolver instance set to the asyncio loop
+    :type resolver: aiodns.DNSResolver
+    :param ip: IP address to request PTR record for.
+    :type ip: str
+    :return: IP Address and its PTR record
+    :rtype: tuple
+    """
+    result = (ip, "")
+    allowed_chars = "abcdefghijklmnopqrstuvwxyz0123456789-."
+    log.info("Requesting PTR record for %s.", ip)
+    try:
+        resp = await resolver.gethostbyaddr(ip)
+        # Make sure records comply to NetBox and DNS expected format
+        if all([bool(c.lower() in allowed_chars) for c in resp.name]):
+            result = (ip, resp.name.lower())
+            log.debug("PTR record for %s is '%s'.", ip, result[1])
+        else:
+            log.debug(
+                "Invalid characters detected in PTR record '%s'. Nulling.",
+                resp.name
+                )
+    except aiodns.error.DNSError as err:
+        log.info("Unable to find record for %s: %s", ip, err.args[1])
+    return result
 
 def truncate(text="", max_len=50):
     """Ensure a string complies to the maximum length specified."""
@@ -1049,6 +1100,45 @@ class NetBoxHandler:
                         req_type="patch", nb_obj_type=nb_obj_type,
                         nb_id=parent_id, data=data
                         )
+
+    def set_dns_names(self):
+        """
+        Performs a reverse DNS lookup on IP addresses and populates DMS name.
+        """
+        log.info("Collecting NetBox IP address objects to set DNS Names.")
+        # Grab all the IPs from NetBox related tagged from the vCenter host
+        ip_objs = self.request(
+            req_type="get", nb_obj_type="ip_addresses",
+            query="?tag={}".format(format_slug(self.vc_tag))
+            )["results"]
+        log.info("Collected %s NetBox IP address objects.", ip_objs)
+        # We take the IP address objects and make a map of relevant details to
+        # compare against and use later
+        nb_objs = {}
+        for obj in ip_objs:
+            ip = obj["address"].split("/")[0]
+            nb_objs[ip] = {
+                "id": obj["id"],
+                "dns_name": obj["dns_name"]
+                }
+        ips = [ip["address"].split("/")[0] for ip in ip_objs]
+        ptrs = queue_dns_lookups(ips)
+        # Having collected the IP address objects from NetBox already we can
+        # avoid individual checks for updates by comparing the objects and ptrs
+        log.info("Comparing latest PTR records against existing NetBox data.")
+        for ip, ptr in ptrs:
+            if ptr != nb_objs[ip]["dns_name"]:
+                log.info(
+                    "Mismatch! The latest PTR for '%s' is '%s' while NetBox "
+                    "has '%s'. Requesting update.", ip, ptr,
+                    nb_objs[ip]["dns_name"]
+                    )
+                self.request(
+                    req_type="patch", nb_obj_type="ip_addresses",
+                    nb_id=nb_objs[ip]["id"], data={"dns_name": ptr}
+                    )
+            else:
+                log.info("NetBox has the latest PTR for '%s'. Moving on.", ip)
 
     def sync_objects(self, vc_obj_type):
         """
