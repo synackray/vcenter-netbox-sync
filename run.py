@@ -130,11 +130,15 @@ def format_slug(text):
     # Enforce max length
     return truncate(text, max_len=50).lower()
 
+
 def format_tag(tag):
     """
     Format string to comply to NetBox tag format and max length.
 
-    NetBox tag max length: 100 characters
+    :param tag: The text which should be formatted
+    :type tag: str
+    :return: Tag which complies to the NetBox required tag format and max length
+    :rtype: str
     """
     # If the tag presented is an IP address then no modifications are required
     try:
@@ -144,6 +148,7 @@ def format_tag(tag):
         tag = tag.split(".")[0]
         tag = truncate(tag, max_len=100)
     return tag
+
 
 def format_vcenter_conn(conn):
     """
@@ -280,7 +285,16 @@ async def reverse_lookup(resolver, ip):
 
 
 def truncate(text="", max_len=50):
-    """Ensure a string complies to the maximum length specified."""
+    """
+    Ensure a string complies to the maximum length specified.
+
+    :param text: Text to be checked for length and truncated if necessary
+    :type text: str
+    :param max_len: Max length of the returned string
+    :type max_len: int, optional
+    :return: Text in :param text: truncated to :param max_len: if necessary
+    :rtype: str
+    """
     return text if len(text) < max_len else text[:max_len]
 
 
@@ -290,6 +304,10 @@ def verify_ip(ip_addr):
 
     Allowed networks can be defined in the settings IPV4_ALLOWED and
     IPV6_ALLOWED variables.
+    :param ip_addr: IP address to check for format and whether its within allowed networks
+    :type ip_addr: str
+    :return: `True` if valid IP and within the allowed networks else `False`
+    :rtype: bool
     """
     result = False
     try:
@@ -319,7 +337,14 @@ def verify_ip(ip_addr):
 
 
 class vCenterHandler:
-    """Handles vCenter connection state and object data collection"""
+    """
+    Handles vCenter connection state and object data collection
+
+    :param vc_conn: Connection details for a vCenter host defined in settings.py
+    :type vc_conn: dict
+    :param nb_api_version: NetBox API version that objects must conform to
+    :type nb_api_version: float
+    """
     def __init__(self, vc_conn, nb_api_version):
         self.nb_api_version = nb_api_version
         self.vc_session = None # Used to hold vCenter session state
@@ -330,7 +355,7 @@ class vCenterHandler:
         self.tags = ["Synced", "vCenter", format_tag(self.vc_host)]
 
     def authenticate(self):
-        """Authenticate to vCenter"""
+        """Create a session to vCenter and authenticate against it"""
         log.info(
             "Attempting authentication to vCenter instance '%s'.",
             self.vc_host
@@ -363,6 +388,8 @@ class vCenterHandler:
         Create a view scoped to the vCenter object type desired.
 
         This should be called before collecting data about vCenter object types.
+        :param vc_obj_type: vCenter object type to extract, must be key in vc_obj_views
+        :type vc_obj_type: str
         """
         # Mapping of object type keywords to view types
         vc_obj_views = {
@@ -381,32 +408,14 @@ class vCenterHandler:
             True # Should we recurively look into view
             )
 
-    def _format_value(self, key, value):
-        """
-        Formats object values depending on the NetBox API version.
-
-        Prior to NetBox API v2.7 NetBox used integers for status and type
-        fields. We use the version of NetBox API to determine whether we need
-        to return integers or named strings.
-        """
-        if self.nb_api_version > 2.6:
-            if key == "status":
-                translation = {0: "offline", 1: "active"}
-            elif key == "type":
-                translation = {0: "virtual", 32767: "other"}
-            result = translation[value]
-        else:
-            result = value
-        return result
-
-
     def get_objects(self, vc_obj_type):
         """
         Collects vCenter objects of type and returns NetBox formated objects.
 
-        Returns dictionary of NetBox object types and corresponding list of
-        Netbox objects. Object format must be compliant to NetBox API POST
-        method (include all required fields).
+        :param vc_obj_type: vCenter object type to extract, must be key in obj_type_map
+        :type vc_obj_type: str
+        :return: Extracted vCenter objects of :param vc_obj_type: in NetBox format
+        :rtype: dict
         """
         log.info(
             "Collecting vCenter %s objects.",
@@ -695,7 +704,12 @@ class vCenterHandler:
         return results
 
 class NetBoxHandler:
-    """Handles NetBox connection state and interaction with API"""
+    """
+    Handles NetBox connection state and interaction with API
+
+    :param vc_conn: Connection details for a vCenter host defined in settings.py
+    :type vc_conn: dict
+    """
     def __init__(self, vc_conn):
         self.nb_api_url = "http{}://{}{}/api/".format(
             ("s" if not settings.NB_DISABLE_TLS else ""), settings.NB_FQDN,
@@ -804,8 +818,6 @@ class NetBoxHandler:
                 "prune_pref": 7
                 },
             }
-        # Create an instance of the vCenter host for use in tagging functions
-        # Strip to hostname if a fqdn was provided
         self.vc_tag = format_tag(vc_conn["HOST"])
         self.vc = vCenterHandler(
             format_vcenter_conn(vc_conn), nb_api_version=self._get_api_version()
@@ -826,7 +838,12 @@ class NetBoxHandler:
         return session
 
     def _get_api_version(self):
-        """Determines the current NetBox API Version"""
+        """
+        Determines the current NetBox API Version
+
+        :return: NetBox API version
+        :rtype: float
+        """
         with self.nb_session.get(
                 self.nb_api_url, timeout=10,
                 verify=(not settings.NB_INSECURE_TLS)) as resp:
@@ -835,7 +852,16 @@ class NetBoxHandler:
         return result
 
     def get_primary_ip(self, nb_obj_type, nb_id):
-        """Collects the primary IP of a NetBox device or virtual machine."""
+        """
+        Collects the primary IP of a NetBox device or virtual machine.
+
+        :param nb_obj_type: NetBox object type; must match key in self.obj_map
+        :type nb_obj_type: str
+        :param nb_id: NetBox object ID of parent object where IP is configured
+        :type nb_id: int
+        :return: Primary IP and ID of the requested NetBox device or virtual machine
+        :rtype: dict
+        """
         query_key = str(
             "device_id" if nb_obj_type == "devices" else "virtual_machine_id"
             )
@@ -861,11 +887,18 @@ class NetBoxHandler:
         """
         HTTP requests and exception handler for NetBox
 
-        req_type: HTTP Method
-        nb_obj_type: NetBox object type, must match keys in self.obj_map
-        data: Dictionary to be passed as request body.
-        query: String used to filter results when using GET method
-        nb_id: Integer used when working with a single NetBox object
+        :param req_type: HTTP method type (GET, POST, PUT, PATCH, DELETE)
+        :type req_type: str
+        :param nb_obj_type: NetBox object type, must match keys in self.obj_map
+        :type nb_obj_type: str
+        :param data: NetBox object key value pairs
+        :type data: dict, optional
+        :param query: Filter for GET method requests
+        :type query: str, optional
+        :param nb_id: NetBox Object ID used when modifying an existing object
+        :type nb_id: int, optional
+        :return: Netbox objects and their corresponding data
+        :rtype: dict
         """
         result = None
         # Generate URL
@@ -962,9 +995,10 @@ class NetBoxHandler:
         If object does not exist or does not match the vCenter object it will
         be created or updated.
 
-        nb_obj_type: String NetBox object type to query for and compare against
-        vc_data: Dictionary of vCenter object key value pairs pre-formatted for
-        NetBox
+        :param nb_obj_type: NetBox object type, must match keys in self.obj_map
+        :type nb_obj_type: str
+        :param vc_data: Extracted object of :param nb_obj_type: from vCenter
+        :type vc_data: dict
         """
         # NetBox Device Types objects do not have names to query; we catch
         # and use the model instead
@@ -1168,6 +1202,8 @@ class NetBoxHandler:
 
         Some object types do not support tags so they will be a one-way sync
         meaning orphaned objects will not be removed from NetBox.
+        :param vc_obj_type: vCenter object type to extract, must be key in obj_type_map
+        :type vc_obj_type: str
         """
         # Collect data from vCenter
         log.info(
@@ -1232,9 +1268,10 @@ class NetBoxHandler:
         If NetBox objects are not found in the supplied vc_objects data then
         they will go through a pruning process.
 
-        vc_objects: Dictionary of VC object types and list of their objects
-        vc_obj_type: The parent object type called during the synce. This is
-        used to determine whether special filtering needs to be applied.
+        :param vc_data: Nested dict of extracted vCenter objects sorted by NetBox object type keys
+        :type vc_objects: dict
+        :param vc_obj_type: vCenter object type to extract, must be key in obj_type_map
+        :type vc_obj_type: str
         """
         # Determine qualifying object types based on object map
         nb_obj_types = [t for t in vc_objects if self.obj_map[t]["prune"]]
@@ -1367,7 +1404,10 @@ class NetBoxHandler:
         """
         Queries Netbox for the parent prefix of any supplied IP address.
 
-        Returns dictionary of VRF and tenant values.
+        :param ip_addr: IP address
+        :type ip_addr: str
+        :return: The VRF and tenant name of the prefix containing :param ip_addr:
+        :rtype: dict
         """
         result = {"tenant": None, "vrf": None}
         query = "?contains={}".format(ip_addr)
