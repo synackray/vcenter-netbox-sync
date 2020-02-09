@@ -11,7 +11,7 @@ from pyVim.connect import SmartConnectNoSSL, Disconnect
 from pyVmomi import vim
 import settings
 from logger import log
-from netbox_templates import Templates
+from templates.netbox import Templates
 
 
 def main():

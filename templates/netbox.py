@@ -78,7 +78,7 @@ class Templates:
 
         :param name: Name of the cluster group
         :type name: str
-        :param slug: Unique slug for cluster group. A slug will be derived from :param name: if no slug is provided.
+        :param slug: Unique slug for cluster group.
         :type slug: str, optional
         """
         obj = {
@@ -201,7 +201,7 @@ class Templates:
         :type manufacturer: str
         :param model: Name of NetBox model object
         :type model: str
-        :param slug: Unique slug for manufacturer. A slug will be derived from :param name: if no slug is provided.
+        :param slug: Unique slug for manufacturer.
         :type slug: str, optional
         :param part_number: Unique partner number for the device
         :type part_number: str, optional
@@ -286,7 +286,7 @@ class Templates:
 
         :param name: Name of the manufacturer
         :type name: str
-        :param slug: Unique slug for manufacturer. A slug will be derived from :param name: if no slug is provided.
+        :param slug: Unique slug for manufacturer.
         :type slug: str, optional
         """
         obj = {
