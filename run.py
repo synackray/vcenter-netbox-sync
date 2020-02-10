@@ -183,6 +183,33 @@ def format_vcenter_conn(conn):
     return conn
 
 
+def is_banned_asset_tag(text):
+    """
+    Determines whether the text is a banned asset tag through various tests.
+
+    :param text: Text to be checked against banned asset tags
+    :type text: str
+    :return: `True` if a banned asset tag else `False`
+    :rtype: bool
+    """
+    # Is asset tag in banned list?
+    text = text.lower()
+    banned_tags = ["Default string", "Unknown", " ", ""]
+    banned_tags = [t.lower() for t in banned_tags]
+    if text in banned_tags:
+        result = True
+    # Does it exceed the max allowed length for NetBox asset tags?
+    elif len(text) > 50:
+        result = True
+    # Does asset tag contain all spaces?
+    elif text.replace(" ", "") == "":
+        result = True
+    # Apparently a "good" asset tag :)
+    else:
+        result = False
+    return result
+
+
 def main():
     """Main function ran when the script is called directly."""
     parser = argparse.ArgumentParser()
@@ -519,23 +546,23 @@ class vCenterHandler:
                     else:
                         serial_number = None
                     # Asset Tag
-                    if "AssetTag" in hw_idents.keys():
-                        asset_tag = hw_idents["AssetTag"].lower()
-                        log.debug(
-                            "Received asset tag '%s' from vCenter.",
-                            asset_tag
-                            )
-                        banned_tags = ["Default string", "Unknown", " ", ""]
-                        banned_tags = [t.lower() for t in banned_tags]
-                        if asset_tag in banned_tags:
-                            log.debug("Banned asset tag string. Nulling.")
-                            asset_tag = None
-                    else:
-                        log.debug(
-                            "No asset tag detected for device '%s'.", obj_name
-                            )
-                        asset_tag = None
-                    log.debug("Final decided asset tag: %s", asset_tag)
+                    asset_tag = None
+                    if settings.ASSET_TAGS:
+                        if "AssetTag" in hw_idents.keys():
+                            asset_tag = hw_idents["AssetTag"].lower()
+                            log.debug(
+                                "Received asset tag '%s' from vCenter.",
+                                asset_tag
+                                )
+                            if is_banned_asset_tag(asset_tag):
+                                log.debug("Banned asset tag string. Nulling.")
+                        else:
+                            log.debug(
+                                "No asset tag detected for device '%s'.",
+                                obj_name
+                                )
+                        log.debug("Final decided asset tag: %s", asset_tag)
+                    # Create NetBox device
                     results["devices"].append(nbt.device(
                         name=truncate(obj_name, max_len=64),
                         device_role="Server",
@@ -825,7 +852,7 @@ class NetBoxHandler:
             }
         self.vc_tag = format_tag(vc_conn["HOST"])
         self.vc = vCenterHandler(
-            format_vcenter_conn(vc_conn), nb_api_version=self._get_api_version()
+            format_vcenter_conn(vc_conn), nb_api_version=self.nb_api_version
             )
 
     def _create_nb_session(self):

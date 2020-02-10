@@ -9,6 +9,7 @@ IPV6_ALLOWED = ["fe80::/10"] # IPv6 networks eligible to be synced to NetBox
 POPULATE_DNS_NAME = True  # Perform reverse DNS lookup on all eligible IP addresses and populate DNS name field in NetBox
 CUSTOM_DNS_SERVERS = False # Use custom DNS servers defined below
 DNS_SERVERS = ["192.168.1.11", "192.168.1.12"] # [optional] List of DNS servers to query for PTR records
+ASSET_TAGS = True # Attempt to collect asset tags from vCenter hosts
 
 # vCenter Settings
 VC_HOSTS = [
