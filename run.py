@@ -521,6 +521,10 @@ class vCenterHandler:
                     # Asset Tag
                     if "AssetTag" in hw_idents.keys():
                         asset_tag = hw_idents["AssetTag"].lower()
+                        log.debug(
+                            "Received asset tag '%s' from vCenter.",
+                            asset_tag
+                            )
                         banned_tags = ["Default string", "Unknown", " ", ""]
                         banned_tags = [t.lower() for t in banned_tags]
                         if asset_tag in banned_tags:
@@ -531,6 +535,7 @@ class vCenterHandler:
                             "No asset tag detected for device '%s'.", obj_name
                             )
                         asset_tag = None
+                    log.debug("Final decided asset tag: %s", asset_tag)
                     results["devices"].append(nbt.device(
                         name=truncate(obj_name, max_len=64),
                         device_role="Server",
