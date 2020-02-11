@@ -17,10 +17,8 @@ def format_slug(text):
     """
     Format string to comply to NetBox slug acceptable pattern and max length.
 
-    :param text: Text to be formatted into an acceptable slug
-    :type text: str
-    :return: Slug of allowed characters [-a-zA-Z0-9_] with max length of 50
-    :rtype: str
+    NetBox slug pattern: ^[-a-zA-Z0-9_]+$
+    NetBox slug max length: 50 characters
     """
     allowed_chars = (
         "abcdefghijklmnopqrstuvxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" # Alphabet
@@ -355,9 +353,6 @@ class Templates:
                     44: "carp"
                     },
                 "status": {
-                    # Zero should be offline but does not exist in NetBox v2.7
-                    # so we remap it to deprecated
-                    0: "deprecated",
                     1: "active",
                     2: "reserved",
                     3: "deprecated",
