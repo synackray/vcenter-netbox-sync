@@ -355,9 +355,6 @@ class Templates:
                     44: "carp"
                     },
                 "status": {
-                    # Zero should be offline but does not exist in NetBox v2.7
-                    # so we remap it to deprecated
-                    0: "deprecated",
                     1: "active",
                     2: "reserved",
                     3: "deprecated",
