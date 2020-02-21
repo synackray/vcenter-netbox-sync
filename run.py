@@ -194,7 +194,9 @@ def is_banned_asset_tag(text):
     """
     # Is asset tag in banned list?
     text = text.lower()
-    banned_tags = ["Default string", "Unknown", " ", ""]
+    banned_tags = [
+        "Default string", "NA", "N/A", "None", "Null", "Unknown", " ", ""
+        ]
     banned_tags = [t.lower() for t in banned_tags]
     if text in banned_tags:
         result = True
@@ -548,20 +550,30 @@ class vCenterHandler:
                     # Asset Tag
                     asset_tag = None
                     if settings.ASSET_TAGS:
-                        if "AssetTag" in hw_idents.keys():
-                            asset_tag = hw_idents["AssetTag"].lower()
+                        try:
+                            if "AssetTag" in hw_idents.keys():
+                                if not is_banned_asset_tag(asset_tag):
+                                    asset_tag = hw_idents["AssetTag"].lower()
+                                    log.debug(
+                                        "Received asset tag '%s' from vCenter.",
+                                        asset_tag
+                                        )
+                                else:
+                                    log.debug(
+                                        "Banned asset tag string. Nulling."
+                                        )
+                            else:
+                                log.debug(
+                                    "No asset tag detected for device '%s'.",
+                                    obj_name
+                                    )
+                            log.debug("Final decided asset tag: %s", asset_tag)
+                        except AttributeError as error:
                             log.debug(
-                                "Received asset tag '%s' from vCenter.",
-                                asset_tag
+                                "Received error when checking asset tag for "
+                                " device '%s'. Error: %s",
+                                obj_name, error
                                 )
-                            if is_banned_asset_tag(asset_tag):
-                                log.debug("Banned asset tag string. Nulling.")
-                        else:
-                            log.debug(
-                                "No asset tag detected for device '%s'.",
-                                obj_name
-                                )
-                        log.debug("Final decided asset tag: %s", asset_tag)
                     # Create NetBox device
                     results["devices"].append(nbt.device(
                         name=truncate(obj_name, max_len=64),
