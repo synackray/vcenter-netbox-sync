@@ -23,8 +23,8 @@ def format_slug(text):
     :rtype: str
     """
     allowed_chars = (
-        "abcdefghijklmnopqrstuvxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" # Alphabet
-        "01234567890" # Numbers
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" # Alphabet
+        "0123456789" # Numbers
         "_-" # Symbols
         )
     # Replace seperators with dash
