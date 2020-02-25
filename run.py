@@ -459,7 +459,8 @@ class vCenterHandler:
                 "ip_addresses"
                 ],
             "virtual_machines": [
-                "virtual_machines", "virtual_interfaces", "ip_addresses"
+                "platforms", "virtual_machines", "virtual_interfaces",
+                "ip_addresses"
                 ]
             }
         results = {}
@@ -552,8 +553,8 @@ class vCenterHandler:
                     if settings.ASSET_TAGS:
                         try:
                             if "AssetTag" in hw_idents.keys():
+                                asset_tag = hw_idents["AssetTag"].lower()
                                 if not is_banned_asset_tag(asset_tag):
-                                    asset_tag = hw_idents["AssetTag"].lower()
                                     log.debug(
                                         "Received asset tag '%s' from vCenter.",
                                         asset_tag
@@ -670,16 +671,17 @@ class vCenterHandler:
                         "Collecting info for virtual machine '%s'", obj_name
                         )
                     # Platform
-                    vm_family = obj.guest.guestFamily
-                    platform = None
+                    platform = obj.guest.guestFullName
                     cluster = truncate(
                         obj.runtime.host.parent.name, max_len=100
                         )
-                    if vm_family is not None:
-                        if "linux" in vm_family:
-                            platform = {"name": "Linux"}
-                        elif "windows" in vm_family:
-                            platform = {"name": "Windows"}
+                    if platform is not None:
+                        # Add new platform object if it doesn't already exist
+                        if truncate(platform, max_len=100) not in (
+                                res["name"] for res in results["platforms"]):
+                            results["platforms"].append(nbt.platform(
+                                name=platform,
+                                ))
                     results["virtual_machines"].append(nbt.virtual_machine(
                         name=truncate(obj_name, max_len=64),
                         cluster=cluster,
@@ -699,7 +701,7 @@ class vCenterHandler:
                         ))
                     # If VMware Tools is not detected then we cannot reliably
                     # collect interfaces and IP addresses
-                    if vm_family:
+                    if platform:
                         for index, nic in enumerate(obj.guest.net):
                             # Interfaces
                             nic_name = "vNIC{}".format(index)
