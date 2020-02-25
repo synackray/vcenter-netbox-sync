@@ -1490,8 +1490,6 @@ class NetBoxHandler:
                 ],
             "platforms": [
                 {"name": "VMware ESXi", "slug": "vmware-esxi"},
-                {"name": "Windows", "slug": "windows"},
-                {"name": "Linux", "slug": "linux"},
                 ],
             "sites": [{
                 "name": "vCenter",
