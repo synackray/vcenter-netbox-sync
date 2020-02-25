@@ -577,7 +577,7 @@ class vCenterHandler:
                     # Create NetBox device
                     results["devices"].append(nbt.device(
                         name=truncate(obj_name, max_len=64),
-                        device_role="Server",
+                        device_role=settings.DEVICE_ROLE,
                         device_type=obj_model,
                         platform="VMware ESXi",
                         site="vCenter",

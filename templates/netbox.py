@@ -13,7 +13,7 @@ def remove_empty_fields(obj):
     return {k: v for k, v in obj.items() if v is not None}
 
 
-def format_slug(text):
+def format_slug(text, max_len=50):
     """
     Format string to comply to NetBox slug acceptable pattern and max length.
 
@@ -24,7 +24,7 @@ def format_slug(text):
     """
     allowed_chars = (
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" # Alphabet
-        "0123456789" # Numbers
+        "01234567890" # Numbers
         "_-" # Symbols
         )
     # Replace seperators with dash
@@ -34,7 +34,7 @@ def format_slug(text):
     # Strip unacceptable characters
     text = "".join([c for c in text if c in allowed_chars])
     # Enforce max length
-    return truncate(text, max_len=50).lower()
+    return truncate(text, max_len).lower()
 
 
 def truncate(text="", max_len=50):
@@ -44,6 +44,139 @@ def truncate(text="", max_len=50):
 
 class Templates:
     """NetBox object templates"""
+    # Maps NetBox object types friendly name key, api path, and prunability
+    obj_type_map = {
+        "cluster_groups": {
+            "api_app": "virtualization",
+            "api_model": "cluster-groups",
+            "key": "name",
+            "prune": False,
+            "sync_pref": 3
+            },
+        "cluster_types": {
+            "api_app": "virtualization",
+            "api_model": "cluster-types",
+            "key": "name",
+            "prune": False,
+            "sync_pref": 4
+            },
+        "clusters": {
+            "api_app": "virtualization",
+            "api_model": "clusters",
+            "key": "name",
+            "prune": True,
+            "prune_pref": 2,
+            "sync_pref": 5
+            },
+        "device_roles": {
+            "api_app": "dcim",
+            "api_model": "device-roles",
+            "key": "name",
+            "prune": False,
+            "sync_pref": 6
+            },
+        "device_types": {
+            "api_app": "dcim",
+            "api_model": "device-types",
+            "key": "model",
+            "prune": True,
+            "prune_pref": 3,
+            "sync_pref": 7
+            },
+        "devices": {
+            "api_app": "dcim",
+            "api_model": "devices",
+            "key": "name",
+            "prune": True,
+            "prune_pref": 4,
+            "sync_pref": 10
+            },
+        "interfaces": {
+            "api_app": "dcim",
+            "api_model": "interfaces",
+            "key": "name",
+            "prune": True,
+            "prune_pref": 5,
+            "sync_pref": 12
+            },
+        "ip_addresses": {
+            "api_app": "ipam",
+            "api_model": "ip-addresses",
+            "key": "address",
+            "prune": True,
+            "prune_pref": 8,
+            "sync_pref": 16
+            },
+        "manufacturers": {
+            "api_app": "dcim",
+            "api_model": "manufacturers",
+            "key": "name",
+            "prune": False,
+            "sync_pref": 7
+            },
+        "platforms": {
+            "api_app": "dcim",
+            "api_model": "platforms",
+            "key": "name",
+            "prune": False,
+            "sync_pref": 8
+            },
+        "prefixes": {
+            "api_app": "ipam",
+            "api_model": "prefixes",
+            "key": "prefix",
+            "prune": False,
+            "sync_pref": 15
+            },
+        "sites": {
+            "api_app": "dcim",
+            "api_model": "sites",
+            "key": "name",
+            "prune": True,
+            "prune_pref": 1,
+            "sync_pref": 1
+            },
+        "tags": {
+            "api_app": "extras",
+            "api_model": "tags",
+            "key": "name",
+            "prune": False,
+            "sync_pref": 2
+            },
+        "tenants": {
+            "api_app": "tenancy",
+            "api_model": "tenants",
+            "key": "name",
+            "prune": True,
+            "prune_pref": 1,
+            "sync_pref": 9
+            },
+        "virtual_machines": {
+            "api_app": "virtualization",
+            "api_model": "virtual-machines",
+            "key": "name",
+            "prune": True,
+            "prune_pref": 6,
+            "sync_pref": 13
+            },
+        "virtual_interfaces": {
+            "api_app": "virtualization",
+            "api_model": "interfaces",
+            "key": "name",
+            "prune": True,
+            "prune_pref": 7,
+            "sync_pref": 14
+            },
+        "vlans": {
+            "api_app": "ipam",
+            "api_model": "vlans",
+            "key": "name",
+            "prune": True,
+            "prune_pref": 8,
+            "sync_pref": 11
+            }
+        }
+
     def __init__(self, api_version):
         """
         Required parameters for the NetBox class
@@ -89,9 +222,9 @@ class Templates:
             }
         return remove_empty_fields(obj)
 
-    def device(self, name, device_role, device_type, display_name=None,
-               platform=None, site=None, serial=None, asset_tag=None,
-               cluster=None, status=None, tags=None):
+    def device(self, name, device_role, device_type, platform=None, site=None,
+               serial=None, asset_tag=None, cluster=None, status=None,
+               tags=None):
         """
         Template for NetBox devices at /dcim/devices/
 
@@ -101,18 +234,16 @@ class Templates:
         :type device_role: str
         :param device_type: Model name of device type
         :type device_type: str
-        :param display_name: Friendly name for device
-        :type display_name: str, opt
         :param platform: Platform running on the device
-        :type platform: str, opt
+        :type platform: str, optional
         :param site: Site where the device resides
-        :type site: str, opt
+        :type site: str, optional
         :param serial: Serial number of the device
-        :type serial: str, opt
+        :type serial: str, optional
         :param asset_tag: Asset tag of the device
-        :type asset_tag: str, opt
+        :type asset_tag: str, optional
         :param cluster: Cluster the device belongs to
-        :type cluster: str, opt
+        :type cluster: str, optional
         :param status: NetBox IP address status in NB API v2.6 format
         :type status: int
         :param tags: Tags to apply to the object
@@ -120,9 +251,8 @@ class Templates:
         """
         obj = {
             "name": name,
-            "device_role": {"name": device_role},
-            "device_type": {"model": device_type},
-            "display_name": display_name,
+            "device_role": {"name": device_role} if device_role else None,
+            "device_type": {"model": device_type} if device_type else None,
             "platform": {"name": platform} if platform else None,
             "site": {"name": site} if site else None,
             "serial": truncate(serial, max_len=50) if serial else None,
@@ -194,6 +324,24 @@ class Templates:
             }
         return remove_empty_fields(obj)
 
+    def device_role(self, name, color=None, slug=None):
+        """
+        Template for NetBox device roles at /dcim/device-roles/
+
+        :param name: Name of the device role
+        :type name: str
+        :param slug: Unique slug for the device role
+        :type slug: str, optional
+        :param color: 6 character hex value of device role color
+        :type color: str, optional
+        """
+        obj = {
+            "name": truncate(name, max_len=50),
+            "color": color if color else "607d8b",
+            "slug": slug if slug else format_slug(name)
+            }
+        return remove_empty_fields(obj)
+
     def device_type(self, manufacturer, model, slug=None, part_number=None,
                     tags=None):
         """
@@ -216,7 +364,7 @@ class Templates:
             "slug": slug if slug else format_slug(model),
             "part_number": truncate(
                 part_number, max_len=50
-                ) if part_number else None,
+                ) if part_number else truncate(model, max_len=50),
             "tags": tags
             }
         return remove_empty_fields(obj)
@@ -294,6 +442,31 @@ class Templates:
         obj = {
             "name": truncate(name, max_len=50),
             "slug": slug if slug else format_slug(name)
+            }
+        return remove_empty_fields(obj)
+
+    def platform(self, name, slug=None, manufacturer=None,
+                 napalm_driver=None, napalm_args=None):
+        """
+        Template for NetBox manufacturers at /dcim/manufacturers
+
+        :param name: Name of the platform
+        :type name: str
+        :param slug: Unique slug for the platform
+        :type slug: str, optional
+        :param manufacturer: Limit this platform to devices of provided manufacturer
+        :type manufacturer: str, optional
+        :param napalm_driver: The name of the NAPALM driver to use when interacting with devices
+        :type napalm_driver: str
+        :param napam_args: Arguments to pass when initiating the NAPALM driver (JSON format)
+        :type napalm_args: dict
+        """
+        obj = {
+            "name": truncate(name, max_len=100),
+            "slug": slug if slug else format_slug(name, max_len=100),
+            "manufacturer": manufacturer,
+            "napalm_driver": napalm_driver,
+            "napalm_args": napalm_args,
             }
         return remove_empty_fields(obj)
 
@@ -453,6 +626,47 @@ class Templates:
             "comments": comments,
             "local_context_data": local_context_data,
             "tags": tags
+            }
+        return remove_empty_fields(obj)
+
+    def vlan(self, vid, name, site=None, group=None, tenant=None, status=None,
+             role=None, description=None, tags=None):
+        """
+        Template for NetBox VLANs at /ipam/vlans/
+
+        :param vid: VLAN ID, maximum value 4094
+        :type vid: int
+        :param name: Name of the VLAN, max length 64
+        :type name: str
+        :param site: Name of site where the VLAN resides
+        :type site: str, optional
+        :param group: Name of VLAN group the VLAN belongs to
+        :type group: str, optional
+        :param tenant: Name of tenant the VLAN belongs to
+        :type tenant: str, optional
+        :param status: `1` if active, `2` if reserved, `3` if deprecated
+        :type status: int, optional
+        :param role: Name of VLAN role
+        :type role: str, optional
+        :param description: Description of VLAN, max length 100
+        :type description: str, optional
+        :param tags: Tags to apply to the object
+        :type tags: list, optional
+        """
+        obj = {
+            "vid": vid,
+            "name": truncate(name, max_len=64),
+            "site": {"name": site} if site else None,
+            "group": {"name": group} if group else None,
+            "tenant": {"name": tenant} if tenant else None,
+            "status": self._version_dependent(
+                nb_obj_type="vlans",
+                key="status",
+                value=status
+                ),
+            "role": {"name": role} if role else None,
+            "description": truncate(description, max_len=100),
+            "tags": tags,
             }
         return remove_empty_fields(obj)
 
