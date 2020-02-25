@@ -617,7 +617,7 @@ class Templates:
                 ),
             "role": {"name": role} if role else None,
             "tenant": {"name": tenant} if tenant else None,
-            "platform": platform,
+            "platform": {"name": platform} if platform else None,
             "primary_ip4": primary_ip4,
             "primary_ip6": primary_ip6,
             "vcpus": vcpus,
