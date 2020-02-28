@@ -24,8 +24,6 @@ CUSTOM_DNS_SERVERS = False
 DNS_SERVERS = ["192.168.1.11", "192.168.1.12"]
 # Create a custom field for virtual machines to track the current host they reside on
 TRACK_VM_HOST = False
-# Specify custom NetBox Device / vCenter Host role. Must match the name of an existing NetBox Device Role.
-DEVICE_ROLE = "Server"
 
 
 # vCenter Settings
