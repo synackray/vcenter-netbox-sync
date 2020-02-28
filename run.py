@@ -1426,48 +1426,51 @@ class NetBoxHandler:
                         nb_id=orphan["id"],
                         data=tags
                         )
-                # Check if the orphan has gone past the max prune timer and
-                # needs to be deleted
-                # Dates are in YY, MM, DD format
-                current_date = date.today()
-                # Some objects do not have a last_updated field so we must
-                # handle that gracefully and send for deletion
-                del_obj = False
-                try:
-                    modified_date = date(
-                        int(orphan["last_updated"][:4]), # Year
-                        int(orphan["last_updated"][5:7]), # Month
-                        int(orphan["last_updated"][8:10]) # Day
-                        )
-                    # Calculated timedelta then converts it to the days integer
-                    days_orphaned = (current_date - modified_date).days
-                    if days_orphaned >= settings.NB_PRUNE_DELAY_DAYS:
-                        log.info(
-                            "The %s '%s' object has exceeded the %s day max "
-                            "for orphaned objects. Sending it for deletion.",
-                            nb_obj_type, orphan[query_key],
-                            settings.NB_PRUNE_DELAY_DAYS
+                else:
+                    # Check if the orphan has gone past the max prune timer and
+                    # needs to be deleted
+                    # Dates are in YY, MM, DD format
+                    current_date = date.today()
+                    # Some objects do not have a last_updated field so we must
+                    # handle that gracefully and send for deletion
+                    del_obj = False
+                    try:
+                        modified_date = date(
+                            int(orphan["last_updated"][:4]), # Year
+                            int(orphan["last_updated"][5:7]), # Month
+                            int(orphan["last_updated"][8:10]) # Day
+                            )
+                        # Calculated timedelta then converts it to the days
+                        # integer
+                        days_orphaned = (current_date - modified_date).days
+                        if days_orphaned >= settings.NB_PRUNE_DELAY_DAYS:
+                            log.info(
+                                "The %s '%s' object has exceeded the %s day "
+                                "max for orphaned objects. Sending it for "
+                                "deletion.",
+                                nb_obj_type, orphan[query_key],
+                                settings.NB_PRUNE_DELAY_DAYS
+                                )
+                            del_obj = True
+                        else:
+                            log.info(
+                                "The %s '%s' object has been orphaned for %s "
+                                "of %s max days. Proceeding to next object.",
+                                nb_obj_type, orphan[query_key], days_orphaned,
+                                settings.NB_PRUNE_DELAY_DAYS
+                                )
+                    except KeyError as err:
+                        log.debug(
+                            "The %s '%s' object does not have a %s "
+                            "field. Sending it for deletion.",
+                            nb_obj_type, orphan[query_key], err
                             )
                         del_obj = True
-                    else:
-                        log.info(
-                            "The %s '%s' object has been orphaned for %s of %s "
-                            "max days. Proceeding to next object.",
-                            nb_obj_type, orphan[query_key], days_orphaned,
-                            settings.NB_PRUNE_DELAY_DAYS
+                    if del_obj:
+                        self.request(
+                            req_type="delete", nb_obj_type=nb_obj_type,
+                            nb_id=orphan["id"],
                             )
-                except KeyError as err:
-                    log.debug(
-                        "The %s '%s' object does not have a %s "
-                        "field. Sending it for deletion.",
-                        nb_obj_type, orphan[query_key], err
-                        )
-                    del_obj = True
-                if del_obj:
-                    self.request(
-                        req_type="delete", nb_obj_type=nb_obj_type,
-                        nb_id=orphan["id"],
-                        )
 
     def search_prefix(self, ip_addr):
         """
