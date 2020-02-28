@@ -91,7 +91,7 @@ class Templates:
             "prune_pref": 4,
             "sync_pref": 10
             },
-        "interfaces": {
+        "device_interfaces": {
             "api_app": "dcim",
             "api_model": "interfaces",
             "key": "name",
@@ -159,7 +159,7 @@ class Templates:
             "prune_pref": 6,
             "sync_pref": 13
             },
-        "virtual_interfaces": {
+        "vm_interfaces": {
             "api_app": "virtualization",
             "api_model": "interfaces",
             "key": "name",
@@ -203,7 +203,7 @@ class Templates:
             "name": truncate(name, max_len=100),
             "type": {"name": ctype},
             "group": {"name": truncate(group, max_len=50)} if group else None,
-            "tags": tags,
+            "tags": tags
             }
         return remove_empty_fields(obj)
 
@@ -265,7 +265,7 @@ class Templates:
                 key="status",
                 value=status
                 ),
-            "tags": tags,
+            "tags": tags
             }
         return remove_empty_fields(obj)
 
@@ -281,7 +281,7 @@ class Templates:
         :param name: Name of the physical interface
         :type name: str
         :param itype: Type of interface `0` if Virtual else `32767` for Other
-        :type itype: str, optional
+        :type itype: int, optional
         :param enabled: `True` if the interface is up else `False`
         :type enabled: bool,optional
         :param mtu: The configured MTU for the interface
@@ -320,7 +320,7 @@ class Templates:
             "mode": mode,
             "untagged_vlan": untagged_vlan,
             "tagged_vlans": tagged_vlans,
-            "tags": tags,
+            "tags": tags
             }
         return remove_empty_fields(obj)
 
@@ -609,7 +609,9 @@ class Templates:
         """
         obj = {
             "name": name,
-            "cluster": {"name": cluster},
+            "cluster": {
+                "name": truncate(cluster, max_len=100)
+                } if cluster else None,
             "status": self._version_dependent(
                 nb_obj_type="virtual_machines",
                 key="status",
@@ -665,8 +667,10 @@ class Templates:
                 value=status
                 ),
             "role": {"name": role} if role else None,
-            "description": truncate(description, max_len=100),
-            "tags": tags,
+            "description": str(
+                truncate(description, max_len=100) if description else None
+                ),
+            "tags": tags
             }
         return remove_empty_fields(obj)
 
@@ -714,6 +718,36 @@ class Templates:
             "mode": mode,
             "untagged_vlan": untagged_vlan,
             "tagged_vlans": tagged_vlans,
-            "tags": tags,
+            "tags": tags
+            }
+        return remove_empty_fields(obj)
+
+    def vrf(self, name, rd=None, tenant=None, enforce_unique=True,
+            description=None, tags=None):
+        """
+        Template for NetBox VRFs at /ipam/vrfs/
+
+        :param name: Name of the VRF
+        :type name: str
+        :param rd: Unique route distinguisher for the VRF
+        :type rd: str, optional
+        :param tenant: Name of tenant the VRF belongs to
+        :type tenant: str, optional
+        :param enforce_unique: Prevent duplicate prefixes/IP addresses within this VRF
+        :type enforce_unique: bool, default True
+        :param description: Description of the VRF, max length 100
+        :type description: str, optional
+        :param tags: Tags to apply to the object
+        :type tags: list, optional
+        """
+        obj = {
+            "name": name,
+            "rd": rd,
+            "tenant": {"name": tenant} if tenant else None,
+            "enforce_unique": enforce_unique,
+            "description": str(
+                truncate(description, max_len=100) if description else None
+                ),
+            "tags": tags
             }
         return remove_empty_fields(obj)
