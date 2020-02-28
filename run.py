@@ -145,7 +145,14 @@ def format_tag(tag):
         ip_network(tag)
     except ValueError:
         # If an IP was not provided then assume fqdn
-        tag = tag.split(".")[0]
+        split_tag = tag.split(".")
+        # Handle cases where the tag would match the general `vCenter` tag
+        if split_tag[0].lower() == "vcenter" and len(split_tag) > 1:
+            tag = "-".join(split_tag)
+        elif split_tag[0].lower() == "vcenter" and len(split_tag) == 1:
+            tag = "vcenter-server"
+        else:
+            tag = split_tag[0]
         tag = truncate(tag, max_len=100)
     return tag
 
@@ -195,7 +202,8 @@ def is_banned_asset_tag(text):
     # Is asset tag in banned list?
     text = text.lower()
     banned_tags = [
-        "Default string", "NA", "N/A", "None", "Null", "Unknown", " ", ""
+        "Default string", "NA", "N/A", "None", "Null", "oem", "o.e.m",
+        "Unknown", " ", ""
         ]
     banned_tags = [t.lower() for t in banned_tags]
     if text in banned_tags:
@@ -382,6 +390,8 @@ class vCenterHandler:
         self.vc_user = vc_conn["USER"]
         self.vc_pass = vc_conn["PASS"]
         self.tags = ["Synced", "vCenter", format_tag(self.vc_host)]
+        # vCenter hosts which are not assigned to a cluster
+        self.standalone_hosts = []
 
     def authenticate(self):
         """Create a session to vCenter and authenticate against it"""
@@ -459,7 +469,8 @@ class vCenterHandler:
                 "ip_addresses"
                 ],
             "virtual_machines": [
-                "virtual_machines", "virtual_interfaces", "ip_addresses"
+                "platforms", "virtual_machines", "virtual_interfaces",
+                "ip_addresses"
                 ]
             }
         results = {}
@@ -552,12 +563,13 @@ class vCenterHandler:
                     if settings.ASSET_TAGS:
                         try:
                             if "AssetTag" in hw_idents.keys():
-                                if not is_banned_asset_tag(asset_tag):
-                                    asset_tag = hw_idents["AssetTag"].lower()
+                                candidate_at = hw_idents["AssetTag"].lower()
+                                if not is_banned_asset_tag(candidate_at):
                                     log.debug(
                                         "Received asset tag '%s' from vCenter.",
-                                        asset_tag
+                                        candidate_at
                                         )
+                                    asset_tag = candidate_at
                                 else:
                                     log.debug(
                                         "Banned asset tag string. Nulling."
@@ -574,16 +586,24 @@ class vCenterHandler:
                                 " device '%s'. Error: %s",
                                 obj_name, error
                                 )
+                    # Cluster
+                    cluster = obj.parent.name
+                    # We throw the cluster away if it matches the ESXi host
+                    # name as it is standalone.
+                    if cluster == obj_name:
+                        # Store the host so that we can check VMs against it
+                        self.standalone_hosts.append(cluster)
+                        cluster = "Standalone ESXi Host"
                     # Create NetBox device
                     results["devices"].append(nbt.device(
                         name=truncate(obj_name, max_len=64),
-                        device_role="Server",
+                        device_role=settings.DEVICE_ROLE,
                         device_type=obj_model,
                         platform="VMware ESXi",
                         site="vCenter",
                         serial=serial_number,
                         asset_tag=asset_tag,
-                        cluster=obj.parent.name,
+                        cluster=cluster,
                         status=int(
                             1 if obj.summary.runtime.connectionState ==
                             "connected" else 0
@@ -669,17 +689,23 @@ class vCenterHandler:
                     log.debug(
                         "Collecting info for virtual machine '%s'", obj_name
                         )
+                    # Cluster
+                    cluster = obj.runtime.host.parent.name
+                    if cluster in self.standalone_hosts:
+                        log.debug(
+                            "VM is assigned to a standalone ESXi host. Setting "
+                            "cluster to 'Standalone ESXi Host'."
+                            )
+                        cluster = "Standalone ESXi Host"
                     # Platform
-                    vm_family = obj.guest.guestFamily
-                    platform = None
-                    cluster = truncate(
-                        obj.runtime.host.parent.name, max_len=100
-                        )
-                    if vm_family is not None:
-                        if "linux" in vm_family:
-                            platform = {"name": "Linux"}
-                        elif "windows" in vm_family:
-                            platform = {"name": "Windows"}
+                    platform = obj.guest.guestFullName
+                    if platform is not None:
+                        # Add new platform object if it doesn't already exist
+                        if truncate(platform, max_len=100) not in (
+                                res["name"] for res in results["platforms"]):
+                            results["platforms"].append(nbt.platform(
+                                name=platform,
+                                ))
                     results["virtual_machines"].append(nbt.virtual_machine(
                         name=truncate(obj_name, max_len=64),
                         cluster=cluster,
@@ -699,7 +725,7 @@ class vCenterHandler:
                         ))
                     # If VMware Tools is not detected then we cannot reliably
                     # collect interfaces and IP addresses
-                    if vm_family:
+                    if platform:
                         for index, nic in enumerate(obj.guest.net):
                             # Interfaces
                             nic_name = "vNIC{}".format(index)
@@ -733,12 +759,11 @@ class vCenterHandler:
                                             interface=nic_name,
                                             tags=self.tags
                                             ))
-            except AttributeError:
+            except AttributeError as err:
                 log.warning(
-                    "Unable to collect necessary data for vCenter %s '%s'"
-                    "object. Skipping.", vc_obj_type, obj
+                    "Unable to collect necessary data for vCenter %s %s"
+                    "object. Received error: %s", vc_obj_type, obj, err
                     )
-                continue
         container_view.Destroy()
         log.debug(
             "Collected %s vCenter %s object%s.", len(results),
@@ -844,7 +869,7 @@ class NetBoxHandler:
             "tags": {
                 "api_app": "extras",
                 "api_model": "tags",
-                "key": "name",
+                "key": "slug",
                 "prune": False,
                 },
             "virtual_machines": {
@@ -1483,31 +1508,6 @@ class NetBoxHandler:
         Validates that all prerequisite NetBox objects exist and creates them.
         """
         dependencies = {
-            "manufacturers": [
-                {"name": "VMware", "slug": "vmware"},
-                ],
-            "platforms": [
-                {"name": "VMware ESXi", "slug": "vmware-esxi"},
-                {"name": "Windows", "slug": "windows"},
-                {"name": "Linux", "slug": "linux"},
-                ],
-            "sites": [{
-                "name": "vCenter",
-                "slug": "vcenter",
-                "comments": "A default virtual site created to house objects "
-                            "that have been synced from vCenter.",
-                "tags": ["Synced", "vCenter"]
-                }],
-            "cluster_types": [
-                {"name": "VMware ESXi", "slug": "vmware-esxi"}
-                ],
-            "device_roles": [
-                {
-                    "name": "Server",
-                    "slug": "server",
-                    "color": "9e9e9e",
-                    "vm_role": True
-                }],
             "tags": [
                 {
                     "name": "Orphaned",
@@ -1528,7 +1528,43 @@ class NetBoxHandler:
                     "comments": "Objects synced from vCenter host "
                                 "{}. Be careful not to modify the name or "
                                 "slug.".format(self.vc_tag)
-                }]
+                },
+                {
+                    "name": "vCenter",
+                    "slug": "vcenter",
+                    "comment": "Created and used by vCenter NetBox sync."
+                }],
+            "manufacturers": [
+                {"name": "VMware", "slug": "vmware"},
+                ],
+            "platforms": [
+                {"name": "VMware ESXi", "slug": "vmware-esxi"},
+                ],
+            "sites": [{
+                "name": "vCenter",
+                "slug": "vcenter",
+                "comments": "A default virtual site created to house objects "
+                            "that have been synced from vCenter.",
+                "tags": ["Synced", "vCenter"]
+                }],
+            "cluster_types": [
+                {"name": "VMware ESXi", "slug": "vmware-esxi"}
+                ],
+            "clusters": [{
+                "name": "Standalone ESXi Host",
+                "type": {"name": "VMware ESXi"},
+                "comments": "A default cluster created to house standalone "
+                            "ESXi hosts and VMs that have been synced from "
+                            "vCenter.",
+                "tags": ["Synced", "vCenter"]
+                }],
+            "device_roles": [
+                {
+                    "name": "Server",
+                    "slug": "server",
+                    "color": "9e9e9e",
+                    "vm_role": True
+                }],
             }
         # For each dependency of each type verify object exists
         log.info("Verifying all prerequisite objects exist in NetBox.")
