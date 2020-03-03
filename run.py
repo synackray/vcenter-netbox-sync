@@ -1444,7 +1444,18 @@ class NetBoxHandler:
                         # Calculated timedelta then converts it to the days
                         # integer
                         days_orphaned = (current_date - modified_date).days
-                        if days_orphaned >= settings.NB_PRUNE_DELAY_DAYS:
+                        # Support keeping orphaned objects if they contan the
+                        # right tag for #89
+                        if bool(days_orphaned >= settings.NB_PRUNE_DELAY_DAYS
+                                and "Manual" in orphan["tags"]):
+                            log.info(
+                                "The %s '%s' object has exceeded the %s day "
+                                "max for orphaned objects however it contains "
+                                "the 'Manual' tag. Skipping deletion.",
+                                nb_obj_type, orphan[query_key],
+                                settings.NB_PRUNE_DELAY_DAYS
+                                )
+                        elif days_orphaned >= settings.NB_PRUNE_DELAY_DAYS:
                             log.info(
                                 "The %s '%s' object has exceeded the %s day "
                                 "max for orphaned objects. Sending it for "
