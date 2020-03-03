@@ -1418,8 +1418,9 @@ class NetBoxHandler:
                         "object.",
                         nb_obj_type, orphan[query_key]
                         )
+                    log.debug("Merging existing tags with `Orphaned`.")
                     tags = {
-                        "tags": ["Synced", "vCenter", self.vc_tag, "Orphaned"]
+                        "tags": list(set(orphan["tags"] + ["Orphaned"]))
                         }
                     self.request(
                         req_type="patch", nb_obj_type=nb_obj_type,
