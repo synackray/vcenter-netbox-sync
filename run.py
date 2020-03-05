@@ -2,6 +2,7 @@
 """Exports vCenter objects and imports them into Netbox via Python3"""
 
 import asyncio
+import aiohttp
 import atexit
 from socket import gaierror
 from datetime import date, datetime
@@ -289,6 +290,24 @@ def queue_dns_lookups(ips):
     queue = asyncio.gather(*(reverse_lookup(resolver, ip) for ip in ips))
     results = loop.run_until_complete(queue)
     return results
+
+
+def queue_tasks(tasks):
+    """
+    Queues async tasks and handles their execution until completion.
+
+    :param tasks: Tasks to be executed
+    :type tasks: list
+    """
+    log.debug(
+        "Queuing %s async task%s for execution.", len(tasks),
+        "s" if len(tasks) > 1 else ""
+        )
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(asyncio.gather(
+        *tasks
+        ))
+    log.debug("Completed processing of all async tasks in queue.")
 
 
 async def reverse_lookup(resolver, ip):
@@ -775,17 +794,22 @@ class vCenterHandler:
 class NetBoxHandler:
     """
     Handles NetBox connection state and interaction with API
-
-    :param vc_conn: Connection details for a vCenter host defined in settings.py
-    :type vc_conn: dict
     """
+    HEADERS = {"Authorization": "Token {}".format(settings.NB_API_KEY)}
+
     def __init__(self, vc_conn):
+        """
+        NetBoxHandler class constructor
+
+        :param vc_conn: Connection details for a vCenter host defined in settings.py
+        :type vc_conn: dict
+        """
+        loop = asyncio.get_event_loop()
         self.nb_api_url = "http{}://{}{}/api/".format(
             ("s" if not settings.NB_DISABLE_TLS else ""), settings.NB_FQDN,
             (":{}".format(settings.NB_PORT) if settings.NB_PORT != 443 else "")
             )
-        self.nb_session = self._create_nb_session()
-        self.nb_api_version = self._get_api_version()
+        self.nb_api_version = queue_tasks([self._get_api_version()])
         # NetBox object type relationships when working in the API
         self.obj_map = {
             "cluster_groups": {
@@ -892,35 +916,27 @@ class NetBoxHandler:
             format_vcenter_conn(vc_conn), nb_api_version=self.nb_api_version
             )
 
-    def _create_nb_session(self):
-        """
-        Creates a session with NetBox
-
-        :return: `True` if session created else `False`
-        :rtype: bool
-        """
-        header = {"Authorization": "Token {}".format(settings.NB_API_KEY)}
-        session = requests.Session()
-        session.headers.update(header)
-        self.nb_session = session
-        log.info("Created new HTTP Session for NetBox.")
-        return session
-
-    def _get_api_version(self):
+    async def _get_api_version(self):
         """
         Determines the current NetBox API Version
 
         :return: NetBox API version
         :rtype: float
         """
-        with self.nb_session.get(
-                self.nb_api_url, timeout=10,
-                verify=(not settings.NB_INSECURE_TLS)) as resp:
-            result = float(resp.headers["API-Version"])
-        log.info("Detected NetBox API v%s.", result)
-        return result
+        log.info("Attemping to detect NetBox API version.")
+        async with aiohttp.ClientSession(conn_timeout=10.0) as sess:
+            try:
+                async with sess.get(
+                        self.nb_api_url,
+                        headers=NetBoxHandler.HEADERS,
+                        verify_ssl=(not settings.NB_INSECURE_TLS)) as resp:
+                    result = float(resp.headers["API-Version"])
+                log.info("Detected NetBox API v%s.", result)
+                return result
+            except aiohttp.client_exceptions.ClientConnectorError as err:
+                raise SystemExit(log.critical(err))
 
-    def get_primary_ip(self, nb_obj_type, nb_id):
+    async def get_primary_ip(self, nb_obj_type, nb_id):
         """
         Collects the primary IP of a NetBox device or virtual machine.
 
@@ -934,7 +950,7 @@ class NetBoxHandler:
         query_key = str(
             "device_id" if nb_obj_type == "devices" else "virtual_machine_id"
             )
-        req = self.request(
+        req = await self.request(
             req_type="get", nb_obj_type="ip_addresses",
             query="?{}={}".format(query_key, nb_id)
             )
@@ -952,7 +968,8 @@ class NetBoxHandler:
             result = None
         return result
 
-    def request(self, req_type, nb_obj_type, data=None, query=None, nb_id=None):
+    async def request(self, req_type, nb_obj_type, data=None, query=None,
+                      nb_id=None):
         """
         HTTP requests and exception handler for NetBox
 
@@ -969,7 +986,7 @@ class NetBoxHandler:
         :return: Netbox objects and their corresponding data
         :rtype: dict
         """
-        result = None
+        results = None
         # Generate URL
         url = "{}{}/{}/{}{}".format(
             self.nb_api_url,
@@ -981,83 +998,91 @@ class NetBoxHandler:
         log.debug(
             "Sending %s to '%s' with data '%s'.", req_type.upper(), url, data
             )
-        req = getattr(self.nb_session, req_type)(
-            url, json=data, timeout=10, verify=(not settings.NB_INSECURE_TLS)
-            )
-        # Parse status
-        log.debug("Received HTTP Status %s.", req.status_code)
-        if req.status_code == 200:
-            log.debug(
-                "NetBox %s request OK; returned %s status.", req_type.upper(),
-                req.status_code
-                )
-            result = req.json()
-            if req_type == "get":
-                # NetBox returns 50 results by default, this ensures all results
-                # are bundled together
-                while req.json()["next"] is not None:
-                    url = req.json()["next"]
+        async with aiohttp.ClientSession(conn_timeout=10.0) as sess:
+            async with sess.request(
+                    method=req_type, url=url, headers=NetBoxHandler.HEADERS,
+                    json=data,
+                    verify_ssl=(not settings.NB_INSECURE_TLS)) as resp:
+                # Parse status
+                log.debug("Received HTTP Status %s.", resp.status)
+                if resp.status == 200:
                     log.debug(
-                        "NetBox returned more than 50 objects. Sending %s to "
-                        "%s for additional objects.", req_type.upper(), url
+                        "NetBox %s request OK; returned %s status.", req_type.upper(),
+                        resp.status
                         )
-                    req = getattr(self.nb_session, req_type)(url, timeout=10)
-                    result["results"] += req.json()["results"]
-        elif req.status_code in [201, 204]:
-            log.info(
-                "NetBox successfully %s %s object.",
-                "created" if req.status_code == 201 else "deleted",
-                nb_obj_type,
-                )
-        elif req.status_code == 400:
-            if req_type == "post":
-                log.warning(
-                    "NetBox failed to create %s object. A duplicate record may "
-                    "exist or the data sent is not acceptable.", nb_obj_type
-                    )
-                log.debug(
-                    "NetBox %s status reason: %s", req.status_code, req.text
-                    )
-            elif req_type == "patch":
-                log.warning(
-                    "NetBox failed to modify %s object with status %s. The "
-                    "data sent may not be acceptable.", nb_obj_type,
-                    req.status_code
-                    )
-                log.debug(
-                    "NetBox %s status reason: %s", req.status_code, req.text
-                    )
-            else:
-                raise SystemExit(
-                    log.critical(
-                        "Well this in unexpected. Please report this. "
-                        "%s request received %s status with body '%s' and "
-                        "response '%s'.",
-                        req_type.upper(), req.status_code, data, req.json()
+                    result = await resp.json()
+                    if req_type == "get":
+                        # NetBox returns 50 results by default, this ensures all results
+                        # are bundled together
+                        results = result["results"]
+                        while result["next"] is not None:
+                            url = result["next"]
+                            log.debug(
+                                "NetBox returned more than 50 objects. Sending %s to "
+                                "%s for additional objects.", req_type.upper(), url
+                                )
+                            async with getattr(sess, req_type)(
+                                    url,
+                                    headers=NetBoxHandler.HEADERS,
+                                    verify_ssl=(not settings.NB_INSECURE_TLS
+                                    )) as resp:
+                                result = await resp.json()
+                                results += result["results"]
+                elif resp.status in [201, 204]:
+                    log.info(
+                        "NetBox successfully %s %s object.",
+                        "created" if resp.status == 201 else "deleted",
+                        nb_obj_type,
                         )
-                    )
-            log.debug("Unaccepted request data: %s", data)
-        elif req.status_code == 409 and req_type == "delete":
-            log.warning(
-                "Received %s status when attemping to delete NetBox object "
-                "(ID: %s). If you have more than 1 vCenter host configured "
-                "this may be deleted on the final pass. Otherwise check the "
-                "object dependencies.",
-                req.status_code, nb_id
-                )
-            log.debug("NetBox %s status body: %s", req.status_code, req.json())
-        else:
-            raise SystemExit(
-                log.critical(
-                    "Well this in unexpected. Please report this. "
-                    "%s request received %s status with body '%s' and response "
-                    "'%s'.",
-                    req_type.upper(), req.status_code, data, req.text
-                    )
-                )
-        return result
+                elif resp.status == 400:
+                    if req_type == "post":
+                        log.warning(
+                            "NetBox failed to create %s object. A duplicate record may "
+                            "exist or the data sent is not acceptable.", nb_obj_type
+                            )
+                        log.debug(
+                            "NetBox %s status reason: %s", resp.status, await resp.text()
+                            )
+                    elif req_type == "patch":
+                        log.warning(
+                            "NetBox failed to modify %s object with status %s. The "
+                            "data sent may not be acceptable.", nb_obj_type,
+                            resp.status
+                            )
+                        log.debug(
+                            "NetBox %s status reason: %s", resp.status, await resp.text()
+                            )
+                    else:
+                        raise SystemExit(
+                            log.critical(
+                                "Well this in unexpected. Please report this. "
+                                "%s request received %s status with body '%s' and "
+                                "response '%s'.",
+                                req_type.upper(), resp.status, data, await resp.json()
+                                )
+                            )
+                    log.debug("Unaccepted request data: %s", data)
+                elif resp.status == 409 and resp_type == "delete":
+                    log.warning(
+                        "Received %s status when attemping to delete NetBox object "
+                        "(ID: %s). If you have more than 1 vCenter host configured "
+                        "this may be deleted on the final pass. Otherwise check the "
+                        "object dependencies.",
+                        resp.status, nb_id
+                        )
+                    log.debug("NetBox %s status body: %s", resp.status, await resp.json())
+                else:
+                    raise SystemExit(
+                        log.critical(
+                            "Well this in unexpected. Please report this. "
+                            "%s request received %s status with body '%s' and response "
+                            "'%s'.",
+                            req_type.upper(), resp.status, data, await resp.text()
+                            )
+                        )
+                return results
 
-    def obj_exists(self, nb_obj_type, vc_data):
+    async def obj_exists(self, nb_obj_type, vc_data):
         """
         Checks whether a NetBox object exists and matches the vCenter object.
 
@@ -1085,7 +1110,7 @@ class NetBoxHandler:
                 )
         else:
             query = "?{}={}".format(query_key, vc_data[query_key])
-        req = self.request(
+        req = await self.request(
             req_type="get", nb_obj_type=nb_obj_type,
             query=query
             )
@@ -1105,7 +1130,7 @@ class NetBoxHandler:
                     "but has reappeared in vCenter. Updating NetBox.",
                     nb_obj_type, vc_data[query_key]
                     )
-                self.request(
+                await self.request(
                     req_type="patch", nb_obj_type=nb_obj_type, data=vc_data,
                     nb_id=nb_data["id"]
                     )
@@ -1137,7 +1162,7 @@ class NetBoxHandler:
                         "Removed site from %s object before sending update "
                         "to NetBox.", vc_data[query_key]
                         )
-                self.request(
+                await self.request(
                     req_type="patch", nb_obj_type=nb_obj_type, data=vc_data,
                     nb_id=nb_data["id"]
                     )
@@ -1154,11 +1179,11 @@ class NetBoxHandler:
                 nb_obj_type,
                 vc_data[query_key],
                 )
-            self.request(
+            await self.request(
                 req_type="post", nb_obj_type=nb_obj_type, data=vc_data
                 )
 
-    def set_primary_ips(self):
+    async def set_primary_ips(self):
         """Sets the Primary IP of vCenter hosts and Virtual Machines."""
         for nb_obj_type in ("devices", "virtual_machines"):
             log.info(
@@ -1167,7 +1192,7 @@ class NetBoxHandler:
                 )
             obj_key = self.obj_map[nb_obj_type]["key"]
             # Collect all parent objects that support Primary IPs
-            parents = self.request(
+            parents = await self.request(
                 req_type="get", nb_obj_type=nb_obj_type,
                 query="?tag={}".format(format_slug(self.vc_tag))
                 )
@@ -1221,18 +1246,18 @@ class NetBoxHandler:
                                 ).version
                         ))
                     data = {ip_version: new_pri_ip["id"]}
-                    self.request(
+                    await self.request(
                         req_type="patch", nb_obj_type=nb_obj_type,
                         nb_id=parent_id, data=data
                         )
 
-    def set_dns_names(self):
+    async def set_dns_names(self):
         """
         Performs a reverse DNS lookup on IP addresses and populates DMS name.
         """
         log.info("Collecting NetBox IP address objects to set DNS Names.")
         # Grab all the IPs from NetBox related tagged from the vCenter host
-        ip_objs = self.request(
+        ip_objs = await self.request(
             req_type="get", nb_obj_type="ip_addresses",
             query="?tag={}".format(format_slug(self.vc_tag))
             )["results"]
@@ -1258,7 +1283,7 @@ class NetBoxHandler:
                     "has '%s'. Requesting update.", ip, ptr,
                     nb_objs[ip]["dns_name"]
                     )
-                self.request(
+                await self.request(
                     req_type="patch", nb_obj_type="ip_addresses",
                     nb_id=nb_objs[ip]["id"], data={"dns_name": ptr}
                     )
@@ -1330,7 +1355,7 @@ class NetBoxHandler:
         if settings.NB_PRUNE_ENABLED:
             self.prune_objects(vc_objects, vc_obj_type)
 
-    def prune_objects(self, vc_objects, vc_obj_type):
+    async def prune_objects(self, vc_objects, vc_obj_type):
         """
         Collects NetBox objects and checks if they still exist in vCenter.
 
@@ -1355,7 +1380,7 @@ class NetBoxHandler:
                 "Comparing existing NetBox %s objects to current vCenter "
                 "objects for pruning eligibility.", nb_obj_type
                 )
-            nb_objects = self.request(
+            nb_objects = await self.request(
                 req_type="get", nb_obj_type=nb_obj_type,
                 # Tags need to always be searched by slug
                 query="?tag={}".format(format_slug(self.vc_tag))
@@ -1422,7 +1447,7 @@ class NetBoxHandler:
                     tags = {
                         "tags": list(set(orphan["tags"] + ["Orphaned"]))
                         }
-                    self.request(
+                    await self.request(
                         req_type="patch", nb_obj_type=nb_obj_type,
                         nb_id=orphan["id"],
                         data=tags
@@ -1468,12 +1493,12 @@ class NetBoxHandler:
                             )
                         del_obj = True
                     if del_obj:
-                        self.request(
+                        await self.request(
                             req_type="delete", nb_obj_type=nb_obj_type,
                             nb_id=orphan["id"],
                             )
 
-    def search_prefix(self, ip_addr):
+    async def search_prefix(self, ip_addr):
         """
         Queries Netbox for the parent prefix of any supplied IP address.
 
@@ -1485,7 +1510,7 @@ class NetBoxHandler:
         result = {"tenant": None, "vrf": None}
         query = "?contains={}".format(ip_addr)
         try:
-            prefix_obj = self.request(
+            prefix_obj = await self.request(
                 req_type="get", nb_obj_type="prefixes", query=query
                 )["results"][-1] # -1 used to choose the most specific result
             prefix = prefix_obj["prefix"]
@@ -1576,11 +1601,15 @@ class NetBoxHandler:
             log.debug(
                 "Checking NetBox has necessary %s objects.", dep_type[:-1]
                 )
-            for dep in dependencies[dep_type]:
+            # Place all the dependency checks into the async queue
+            checks = [
                 self.obj_exists(nb_obj_type=dep_type, vc_data=dep)
+                for dep in dependencies[dep_type]
+                ]
+            queue_tasks(checks)
         log.info("Finished verifying prerequisites.")
 
-    def remove_all(self):
+    async def remove_all(self):
         """
         Searches NetBox for all synced objects and then removes them.
 
@@ -1606,7 +1635,7 @@ class NetBoxHandler:
                 "vcenter" if nb_obj_type == "sites"
                 else format_slug(self.vc_tag)
                 )
-            nb_objects = self.request(
+            nb_objects = await self.request(
                 req_type="get", nb_obj_type=nb_obj_type,
                 query=query
                 )["results"]
@@ -1631,7 +1660,7 @@ class NetBoxHandler:
                     "Deleting NetBox %s '%s' object.", nb_obj_type,
                     obj[query_key]
                     )
-                self.request(
+                await self.request(
                     req_type="delete", nb_obj_type=nb_obj_type,
                     nb_id=obj["id"],
                     )
