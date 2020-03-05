@@ -986,7 +986,7 @@ class NetBoxHandler:
         :return: Netbox objects and their corresponding data
         :rtype: dict
         """
-        results = None
+        result = None
         # Generate URL
         url = "{}{}/{}/{}{}".format(
             self.nb_api_url,
@@ -1014,7 +1014,6 @@ class NetBoxHandler:
                     if req_type == "get":
                         # NetBox returns 50 results by default, this ensures all results
                         # are bundled together
-                        results = result["results"]
                         while result["next"] is not None:
                             url = result["next"]
                             log.debug(
@@ -1080,7 +1079,7 @@ class NetBoxHandler:
                             req_type.upper(), resp.status, data, await resp.text()
                             )
                         )
-                return results
+                return result
 
     async def obj_exists(self, nb_obj_type, vc_data):
         """
