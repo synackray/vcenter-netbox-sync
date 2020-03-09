@@ -1007,18 +1007,19 @@ class NetBoxHandler:
                 log.debug("Received HTTP Status %s.", resp.status)
                 if resp.status == 200:
                     log.debug(
-                        "NetBox %s request OK; returned %s status.", req_type.upper(),
-                        resp.status
+                        "NetBox %s request OK; returned %s status.",
+                        req_type.upper(), resp.status
                         )
                     result = await resp.json()
                     if req_type == "get":
-                        # NetBox returns 50 results by default, this ensures all results
-                        # are bundled together
+                        # NetBox returns 50 results by default, this ensures all
+                        # results are bundled together
                         while result["next"] is not None:
                             url = result["next"]
                             log.debug(
-                                "NetBox returned more than 50 objects. Sending %s to "
-                                "%s for additional objects.", req_type.upper(), url
+                                "NetBox returned more than 50 objects. Sending "
+                                "%s to %s for additional objects.",
+                                req_type.upper(), url
                                 )
                             async with getattr(sess, req_type)(
                                     url,
@@ -1036,47 +1037,55 @@ class NetBoxHandler:
                 elif resp.status == 400:
                     if req_type == "post":
                         log.warning(
-                            "NetBox failed to create %s object. A duplicate record may "
-                            "exist or the data sent is not acceptable.", nb_obj_type
+                            "NetBox failed to create %s object. A duplicate "
+                            "record may exist or the data sent is not "
+                            "acceptable.", nb_obj_type"
                             )
                         log.debug(
-                            "NetBox %s status reason: %s", resp.status, await resp.text()
+                            "NetBox %s status reason: %s", resp.status,
+                            await resp.text()
                             )
                     elif req_type == "patch":
                         log.warning(
-                            "NetBox failed to modify %s object with status %s. The "
-                            "data sent may not be acceptable.", nb_obj_type,
+                            "NetBox failed to modify %s object with status %s. "
+                            "The data sent may not be acceptable.", nb_obj_type,
                             resp.status
                             )
                         log.debug(
-                            "NetBox %s status reason: %s", resp.status, await resp.text()
+                            "NetBox %s status reason: %s", resp.status,
+                            await resp.text()
                             )
                     else:
                         raise SystemExit(
                             log.critical(
                                 "Well this in unexpected. Please report this. "
-                                "%s request received %s status with body '%s' and "
-                                "response '%s'.",
-                                req_type.upper(), resp.status, data, await resp.json()
+                                "%s request received %s status with body '%s' "
+                                "and response '%s'.",
+                                req_type.upper(), resp.status, data,
+                                await resp.json()
                                 )
                             )
                     log.debug("Unaccepted request data: %s", data)
                 elif resp.status == 409 and resp_type == "delete":
                     log.warning(
-                        "Received %s status when attemping to delete NetBox object "
-                        "(ID: %s). If you have more than 1 vCenter host configured "
-                        "this may be deleted on the final pass. Otherwise check the "
-                        "object dependencies.",
+                        "Received %s status when attemping to delete NetBox "
+                        "object (ID: %s). If you have more than 1 vCenter host "
+                        "configured this may be deleted on the final pass. "
+                        "Otherwise check the object dependencies.",
                         resp.status, nb_id
                         )
-                    log.debug("NetBox %s status body: %s", resp.status, await resp.json())
+                    log.debug(
+                        "NetBox %s status body: %s", resp.status,
+                        await resp.json()
+                        )
                 else:
                     raise SystemExit(
                         log.critical(
                             "Well this in unexpected. Please report this. "
-                            "%s request received %s status with body '%s' and response "
-                            "'%s'.",
-                            req_type.upper(), resp.status, data, await resp.text()
+                            "%s request received %s status with body '%s' and "
+                            "response '%s'.",
+                            req_type.upper(), resp.status, data,
+                            await resp.text()
                             )
                         )
                 return result
