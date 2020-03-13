@@ -8,7 +8,6 @@ chardet==3.0.4
 idna==2.8
 idna-ssl==1.1.0
 multidict==4.7.5
-pkg-resources==0.0.0
 pycares==3.1.1
 pycparser==2.19
 pyvmomi==6.7.3
