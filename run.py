@@ -2,12 +2,12 @@
 """Exports vCenter objects and imports them into Netbox via Python3"""
 
 import asyncio
-import aiohttp
 import atexit
 from socket import gaierror
 from datetime import date, datetime
-from ipaddress import ip_network
 import argparse
+from ipaddress import ip_network
+import aiohttp
 import aiodns
 from pyVim.connect import SmartConnectNoSSL, Disconnect
 from pyVmomi import vim
@@ -807,7 +807,6 @@ class NetBoxHandler:
         :param vc_conn: Connection details for a vCenter host defined in settings.py
         :type vc_conn: dict
         """
-        loop = asyncio.get_event_loop()
         self.nb_api_url = "http{}://{}{}/api/".format(
             ("s" if not settings.NB_DISABLE_TLS else ""), settings.NB_FQDN,
             (":{}".format(settings.NB_PORT) if settings.NB_PORT != 443 else "")
@@ -1025,12 +1024,11 @@ class NetBoxHandler:
                                 req_type.upper(), url
                                 )
                             async with getattr(sess, req_type)(
-                                    url,
-                                    headers=NetBoxHandler.HEADERS,
-                                    verify_ssl=(not settings.NB_INSECURE_TLS
-                                    )) as resp:
-                                result = await resp.json()
-                                results += result["results"]
+                                    url, headers=NetBoxHandler.HEADERS,
+                                    verify_ssl=(not settings.NB_INSECURE_TLS)) \
+                                    as resp:
+                                resp = await resp.json()
+                                result["results"] += resp.json()["results"]
                 elif resp.status in [201, 204]:
                     log.info(
                         "NetBox successfully %s %s object.",
@@ -1069,7 +1067,7 @@ class NetBoxHandler:
                                 )
                             )
                     log.debug("Unaccepted request data: %s", data)
-                elif resp.status == 409 and resp_type == "delete":
+                elif resp.status == 409 and req_type == "delete":
                     log.warning(
                         "Received %s status when attemping to delete NetBox "
                         "object (ID: %s). If you have more than 1 vCenter host "
