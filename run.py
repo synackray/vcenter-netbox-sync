@@ -9,7 +9,6 @@ from datetime import date, datetime
 from ipaddress import ip_network
 import argparse
 import aiodns
-import requests
 from pyVim.connect import SmartConnectNoSSL, Disconnect
 from pyVmomi import vim
 import settings
@@ -264,8 +263,8 @@ def main():
                     "execution time %s.", vc_host["HOST"],
                     (datetime.now() - start_time)
                     )
-        except (ConnectionError, requests.exceptions.ConnectionError,
-                requests.exceptions.ReadTimeout) as err:
+        except (ConnectionError, aiohttp.client_exceptions.ClientConnectorError,
+                aiohttp.client_exceptions.ServerTimeoutError) as err:
             log.warning(
                 "Critical connection error occurred. Skipping sync with '%s'.",
                 vc_host["HOST"]
@@ -304,11 +303,15 @@ def queue_tasks(tasks):
         "s" if len(tasks) > 1 else ""
         )
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(asyncio.gather(
+    results = loop.run_until_complete(asyncio.gather(
         *tasks
         ))
     log.debug("Completed processing of all async tasks in queue.")
-
+    # If queue tasks is being used for a single task then we don't we unpack
+    # any returned value
+    if len(results) == 1:
+        results = results[0]
+    return results
 
 async def reverse_lookup(resolver, ip):
     """
@@ -1039,7 +1042,7 @@ class NetBoxHandler:
                         log.warning(
                             "NetBox failed to create %s object. A duplicate "
                             "record may exist or the data sent is not "
-                            "acceptable.", nb_obj_type"
+                            "acceptable.", nb_obj_type
                             )
                         log.debug(
                             "NetBox %s status reason: %s", resp.status,
@@ -1316,6 +1319,7 @@ class NetBoxHandler:
         # Determine each NetBox object type collected from vCenter
         nb_obj_types = list(vc_objects.keys())
         for nb_obj_type in nb_obj_types:
+            obj_queue = []
             log.info(
                 "Starting sync of %s vCenter %s object%s to NetBox %s "
                 "object%s.",
@@ -1349,7 +1353,13 @@ class NetBoxHandler:
                             "sync to NetBox.", ip_addr,
                             )
                         continue
+                # Place all objects into a queue after pre-checks
+                obj_queue.append(obj)
+            # Process the queue
+            queue_tasks([
                 self.obj_exists(nb_obj_type=nb_obj_type, vc_data=obj)
+                for obj in obj_queue
+                ])
             log.info(
                 "Finished sync of %s vCenter %s object%s to NetBox %s "
                 "object%s.",
