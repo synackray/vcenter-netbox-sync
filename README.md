@@ -8,7 +8,7 @@ Exports vCenter objects using the [VMware pyVmomi](https://github.com/vmware/pyv
 
 The [NetBox documentation](https://netbox.readthedocs.io/en/stable/#serve-as-a-source-of-truth) makes it clear the tool is intended to act as a "Source of Truth". The automated import of live network state is strongly discouraged. While this is sound logic we've aimed to provide a middle-ground solution for those who desire the functionality.
 
-All objects collected from vCenter have a "lifecycle". Upon import, for supported object types, they are tagged "Synced" and "vCenter" to note their origin and distinguish them from other objects. Using this tagging system also allows for the orphaning of objects which are no longer detected in vCenter. This ensures stale objects are removed from NetBox keeping an accurate current state.
+All objects collected from vCenter have a "lifecycle". Upon import, for supported object types, they are tagged "Synced" and "vCenter" to note their origin and distinguish them from other objects. Using this tagging system also allows for the orphaning of objects which are no longer detected in vCenter. This ensures stale objects are removed from NetBox keeping an accurate current state. Note, adding the tag `Manual` to synced objects will ensure they are not pruned even if they become orphaned.
 
 ## Object Codex
 
