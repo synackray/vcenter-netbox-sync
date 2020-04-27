@@ -5,6 +5,7 @@ import asyncio
 import atexit
 from socket import gaierror
 from datetime import date, datetime
+from urllib.parse import quote_plus
 from ipaddress import ip_network
 import argparse
 import aiodns
@@ -14,6 +15,7 @@ from pyVmomi import vim
 import settings
 from logger import log
 from templates.netbox import Templates
+
 
 
 def compare_dicts(dict1, dict2, dict1_name="d1", dict2_name="d2", path=""):
@@ -1080,7 +1082,7 @@ class NetBoxHandler:
                 )
         elif nb_obj_type == "virtual_interfaces":
             query = "?virtual_machine={}&{}={}".format(
-                vc_data["virtual_machine"]["name"], query_key,
+                quote_plus(vc_data["virtual_machine"]["name"]), query_key,
                 vc_data[query_key]
                 )
         else:
