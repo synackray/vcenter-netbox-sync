@@ -269,7 +269,7 @@ class Templates:
             }
         return remove_empty_fields(obj)
 
-    def device_interface(self, device, name, itype=None, enabled=None, mtu=None,
+    def device_interface(self, device, name, itype, enabled=None, mtu=None,
                          mac_address=None, mgmt_only=None, description=None,
                          cable=None, mode=None, untagged_vlan=None,
                          tagged_vlans=None, tags=None):
@@ -281,7 +281,7 @@ class Templates:
         :param name: Name of the physical interface
         :type name: str
         :param itype: Type of interface `0` if Virtual else `32767` for Other
-        :type itype: int, optional
+        :type itype: int
         :param enabled: `True` if the interface is up else `False`
         :type enabled: bool,optional
         :param mtu: The configured MTU for the interface
@@ -310,7 +310,7 @@ class Templates:
                 nb_obj_type="interfaces",
                 key="type",
                 value=itype
-                ) if itype else None,
+                ),
             "enabled": enabled,
             "mtu": mtu,
             "mac_address": mac_address.upper() if mac_address else None,
