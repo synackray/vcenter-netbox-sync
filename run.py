@@ -795,98 +795,113 @@ class NetBoxHandler:
                 "api_model": "cluster-groups",
                 "key": "name",
                 "prune": False,
+                "taggable": False
                 },
             "cluster_types": {
                 "api_app": "virtualization",
                 "api_model": "cluster-types",
                 "key": "name",
                 "prune": False,
+                "taggable": False
                 },
             "clusters": {
                 "api_app": "virtualization",
                 "api_model": "clusters",
                 "key": "name",
                 "prune": True,
-                "prune_pref": 2
+                "prune_pref": 2,
+                "taggable": True
                 },
             "device_roles": {
                 "api_app": "dcim",
                 "api_model": "device-roles",
                 "key": "name",
                 "prune": False,
+                "taggable": False
                 },
             "device_types": {
                 "api_app": "dcim",
                 "api_model": "device-types",
                 "key": "model",
                 "prune": True,
-                "prune_pref": 3
+                "prune_pref": 3,
+                "taggable": True
                 },
             "devices": {
                 "api_app": "dcim",
                 "api_model": "devices",
                 "key": "name",
                 "prune": True,
-                "prune_pref": 4
+                "prune_pref": 4,
+                "taggable": True
                 },
             "interfaces": {
                 "api_app": "dcim",
                 "api_model": "interfaces",
                 "key": "name",
                 "prune": True,
-                "prune_pref": 5
+                "prune_pref": 5,
+                "taggable": True
                 },
             "ip_addresses": {
                 "api_app": "ipam",
                 "api_model": "ip-addresses",
                 "key": "address",
                 "prune": True,
-                "prune_pref": 8
+                "prune_pref": 8,
+                "taggable": False
                 },
             "manufacturers": {
                 "api_app": "dcim",
                 "api_model": "manufacturers",
                 "key": "name",
                 "prune": False,
+                "taggable": False
                 },
             "platforms": {
                 "api_app": "dcim",
                 "api_model": "platforms",
                 "key": "name",
                 "prune": False,
+                "taggable": False
                 },
             "prefixes": {
                 "api_app": "ipam",
                 "api_model": "prefixes",
                 "key": "prefix",
                 "prune": False,
+                "taggable": False
                 },
             "sites": {
                 "api_app": "dcim",
                 "api_model": "sites",
                 "key": "name",
                 "prune": True,
-                "prune_pref": 1
+                "prune_pref": 1,
+                "taggable": False
                 },
             "tags": {
                 "api_app": "extras",
                 "api_model": "tags",
                 "key": "slug",
                 "prune": False,
+                "taggable": False
                 },
             "virtual_machines": {
                 "api_app": "virtualization",
                 "api_model": "virtual-machines",
                 "key": "name",
                 "prune": True,
-                "prune_pref": 6
+                "prune_pref": 6,
+                "taggable": True
                 },
             "virtual_interfaces": {
                 "api_app": "virtualization",
                 "api_model": "interfaces",
                 "key": "name",
                 "prune": True,
-                "prune_pref": 7
+                "prune_pref": 7,
+                "taggable": True
                 },
             }
         self.vc_tag = format_tag(vc_conn["HOST"])
@@ -1086,7 +1101,12 @@ class NetBoxHandler:
                 vc_data[query_key]
                 )
         else:
-            query = "?{}={}".format(query_key, vc_data[query_key])
+            query = "?{}={}".format(
+                query_key, vc_data[query_key]
+                )
+        # Add support for filtering objects by vCenter tags
+        if self.obj_map[nb_obj_type]["taggable"]:
+            query = query + "&?tag={}".format(self.vc_tag)
         req = self.request(
             req_type="get", nb_obj_type=nb_obj_type,
             query=query
